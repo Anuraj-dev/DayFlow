@@ -52,6 +52,28 @@ export function exceptionKindLabel(kind: string | null | undefined): string {
   }
 }
 
+export function leaveStatusLabel(status: string | null | undefined): string {
+  switch (normalizeStatus(status)) {
+    case 'draft':
+      return 'Draft'
+    case 'pending':
+      return 'Pending'
+    case 'approved':
+      return 'Approved'
+    case 'rejected':
+      return 'Rejected'
+    case 'cancelled':
+      return 'Cancelled'
+    case 'overlap':
+      return 'Overlap'
+    case 'insufficient':
+    case 'insufficient_balance':
+      return 'Insufficient balance'
+    default:
+      return status ? status.replace(/_/g, ' ') : 'Unknown'
+  }
+}
+
 export function employeeStatusLabel(status: string | null | undefined): string {
   switch (status) {
     case 'ACTIVE':
@@ -70,7 +92,18 @@ export function statusTone(label: string): 'neutral' | 'confirmed' | 'review' | 
   if (['active', 'approved', 'published', 'present', 'checked in', 'checked out'].includes(value)) {
     return 'confirmed'
   }
-  if (['rejected', 'locked', 'danger', 'missing check-out', 'inactive', 'missing document'].includes(value)) {
+  if (
+    [
+      'rejected',
+      'locked',
+      'danger',
+      'missing check-out',
+      'inactive',
+      'missing document',
+      'insufficient balance',
+      'overlap',
+    ].includes(value)
+  ) {
     return 'danger'
   }
   if (
@@ -84,6 +117,7 @@ export function statusTone(label: string): 'neutral' | 'confirmed' | 'review' | 
       'late',
       'half-day',
       'correction requested',
+      'conflict',
     ].includes(value)
   ) {
     return 'review'
