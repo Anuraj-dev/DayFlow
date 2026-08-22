@@ -1,8 +1,8 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,24 +16,37 @@ from app.domain.attendance import (
     CorrectionStatus,
     assert_can_request_correction,
     assert_review_decision,
+    calendar_day_status,
     can_check_in,
     can_check_out,
     derive_day_status,
+    extra_minutes,
+    is_scheduled_workday,
+    iter_dates,
+    parse_year_month,
+    summarize_payable_days,
     worked_minutes,
+    year_month_label,
+    DayPayableInput,
 )
-from app.domain.roles import Role
+from app.domain.roles import EmployeeStatus, Role
 from app.models import (
     AttendanceCorrectionRequest,
     AttendanceSession,
     AuditEvent,
     Employee,
+    Holiday,
     LeaveRequest,
+    LeaveType,
     Organization,
     WorkPolicy,
 )
 from app.schemas.attendance import (
+    AttendanceDayOut,
     AttendanceExceptionOut,
     AttendanceHome,
+    AttendanceMonthSummary,
+    AttendanceRosterRow,
     AttendanceSessionOut,
     CorrectionCreateRequest,
     CorrectionOut,
@@ -44,8 +57,18 @@ from app.schemas.attendance import (
 router = APIRouter(prefix="/attendance", tags=["attendance"])
 
 
-def _session_out(session: AttendanceSession) -> AttendanceSessionOut:
-    return AttendanceSessionOut.model_validate(session)
+def _session_out(session: AttendanceSession, full_day_minutes: int = 480) -> AttendanceSessionOut:
+    return AttendanceSessionOut(
+        id=session.id,
+        employee_id=session.employee_id,
+        work_date=session.work_date,
+        check_in_at=session.check_in_at,
+        check_out_at=session.check_out_at,
+        source=session.source,
+        status=session.status,
+        worked_minutes=session.worked_minutes,
+        extra_minutes=extra_minutes(session.worked_minutes, full_day_minutes),
+    )
 
 
 def _correction_out(row: AttendanceCorrectionRequest) -> CorrectionOut:
@@ -221,11 +244,73 @@ async def _pending_exceptions(
     return exceptions
 
 
+async def _work_policy(db: AsyncSession, organization_id: UUID) -> WorkPolicy | None:
+    return await db.scalar(select(WorkPolicy).where(WorkPolicy.organization_id == organization_id))
+
+
+async def _holiday_dates(db: AsyncSession, organization_id: UUID) -> set[date]:
+    return set(await db.scalars(select(Holiday.date).where(Holiday.organization_id == organization_id)))
+
+
+async def _approved_leaves(
+    db: AsyncSession,
+    organization_id: UUID,
+    *,
+    starts_on: date,
+    ends_on: date,
+    employee_id: UUID | None = None,
+) -> list[tuple[UUID, date, date, bool]]:
+    query = (
+        select(LeaveRequest.employee_id, LeaveRequest.starts_on, LeaveRequest.ends_on, LeaveType.is_paid)
+        .join(LeaveType, LeaveType.id == LeaveRequest.leave_type_id)
+        .join(Employee, Employee.id == LeaveRequest.employee_id)
+        .where(
+            Employee.organization_id == organization_id,
+            LeaveRequest.status == "APPROVED",
+            LeaveRequest.starts_on <= ends_on,
+            LeaveRequest.ends_on >= starts_on,
+        )
+    )
+    if employee_id is not None:
+        query = query.where(LeaveRequest.employee_id == employee_id)
+    return list((await db.execute(query)).all())
+
+
+def _leave_flags(
+    leaves: list[tuple[UUID, date, date, bool]],
+    employee_id: UUID,
+    day: date,
+) -> tuple[bool, bool]:
+    paid = False
+    unpaid = False
+    for owner_id, starts_on, ends_on, is_paid in leaves:
+        if owner_id != employee_id or day < starts_on or day > ends_on:
+            continue
+        if is_paid:
+            paid = True
+        else:
+            unpaid = True
+    return paid, unpaid
+
+
 @router.get("", response_model=AttendanceHome)
 async def list_attendance(
+    month: str | None = Query(default=None),
     principal: CurrentPrincipal = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> AttendanceHome:
+    timezone_name = await _org_timezone(db, principal.organization_id)
+    today = datetime.now(UTC).astimezone(ZoneInfo(timezone_name)).date()
+    try:
+        month_start, month_end = parse_year_month(month) if month else parse_year_month(year_month_label(today))
+    except AttendanceError as exc:
+        _raise_attendance(exc)
+    month_label = year_month_label(month_start)
+    policy = await _work_policy(db, principal.organization_id)
+    full_day_minutes = policy.full_day_minutes if policy else 480
+    workweek = policy.workweek if policy and policy.workweek else [0, 1, 2, 3, 4]
+    holidays = await _holiday_dates(db, principal.organization_id)
+
     query = (
         select(AttendanceSession)
         .join(Employee, Employee.id == AttendanceSession.employee_id)
@@ -249,14 +334,113 @@ async def list_attendance(
         if current is not None:
             open_row = OpenSessionOut(id=current.id, check_in_at=current.check_in_at)
     exceptions: list[AttendanceExceptionOut] = []
+    roster: list[AttendanceRosterRow] = []
+    days: list[AttendanceDayOut] = []
+    summary = None
     if principal.role is Role.HR:
         exceptions = await _pending_exceptions(db, principal.organization_id)
+        people = list(
+            await db.scalars(
+                select(Employee)
+                .where(
+                    Employee.organization_id == principal.organization_id,
+                    Employee.status == EmployeeStatus.ACTIVE.value,
+                )
+                .order_by(Employee.last_name, Employee.first_name)
+            )
+        )
+        today_sessions = {
+            row.employee_id: row for row in sessions if row.work_date == today
+        }
+        today_leaves = await _approved_leaves(
+            db, principal.organization_id, starts_on=today, ends_on=today
+        )
+        for person in people:
+            session_row = today_sessions.get(person.id)
+            paid, unpaid = _leave_flags(today_leaves, person.id, today)
+            scheduled = is_scheduled_workday(today, workweek=workweek, holidays=holidays)
+            status = calendar_day_status(
+                scheduled=scheduled,
+                status=session_row.status if session_row is not None else None,
+                on_paid_leave=paid,
+                on_unpaid_leave=unpaid,
+            )
+            roster.append(
+                AttendanceRosterRow(
+                    employee_id=person.id,
+                    employee_name=f"{person.first_name} {person.last_name}",
+                    check_in_at=session_row.check_in_at if session_row is not None else None,
+                    check_out_at=session_row.check_out_at if session_row is not None else None,
+                    worked_minutes=session_row.worked_minutes if session_row is not None else None,
+                    extra_minutes=extra_minutes(
+                        session_row.worked_minutes if session_row is not None else None,
+                        full_day_minutes,
+                    ),
+                    status=status,
+                )
+            )
+    else:
+        assert principal.employee_id is not None
+        month_sessions = {row.work_date: row for row in sessions if month_start <= row.work_date <= month_end}
+        month_leaves = await _approved_leaves(
+            db,
+            principal.organization_id,
+            starts_on=month_start,
+            ends_on=month_end,
+            employee_id=principal.employee_id,
+        )
+        payable_inputs: list[DayPayableInput] = []
+        for day in iter_dates(month_start, month_end):
+            scheduled = is_scheduled_workday(day, workweek=workweek, holidays=holidays)
+            session_row = month_sessions.get(day)
+            paid, unpaid = _leave_flags(month_leaves, principal.employee_id, day)
+            status = calendar_day_status(
+                scheduled=scheduled,
+                status=session_row.status if session_row is not None else None,
+                on_paid_leave=paid,
+                on_unpaid_leave=unpaid,
+            )
+            days.append(
+                AttendanceDayOut(
+                    work_date=day,
+                    check_in_at=session_row.check_in_at if session_row is not None else None,
+                    check_out_at=session_row.check_out_at if session_row is not None else None,
+                    worked_minutes=session_row.worked_minutes if session_row is not None else None,
+                    extra_minutes=extra_minutes(
+                        session_row.worked_minutes if session_row is not None else None,
+                        full_day_minutes,
+                    ),
+                    status=status,
+                    scheduled=scheduled,
+                )
+            )
+            payable_inputs.append(
+                DayPayableInput(
+                    work_date=day,
+                    scheduled=scheduled,
+                    status=session_row.status if session_row is not None else None,
+                    on_paid_leave=paid,
+                    on_unpaid_leave=unpaid,
+                )
+            )
+        totals = summarize_payable_days(payable_inputs)
+        summary = AttendanceMonthSummary(
+            days_present=float(totals.days_present),
+            leave_days=float(totals.leave_days),
+            scheduled_working_days=int(totals.scheduled_days),
+        )
     return AttendanceHome(
         role=principal.role.value,
         employee_id=principal.employee_id,
-        sessions=[_session_out(row) for row in sessions],
+        sessions=[_session_out(row, full_day_minutes) for row in sessions],
         open_session=open_row,
         exceptions=exceptions,
+        month=month_label,
+        today=today,
+        full_day_minutes=full_day_minutes,
+        summary=summary,
+        days=days,
+        roster=roster,
     )
 
 

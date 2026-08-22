@@ -68,6 +68,8 @@ class PayrollRecord(UUIDPrimaryKey, TimestampMixin, Base):
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="INR")
     payslip_storage_key: Mapped[str | None] = mapped_column(String(512))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduled_days: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    payable_days: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
 
     period: Mapped[PayrollPeriod] = relationship(back_populates="records")
     lines: Mapped[list["PayrollRecordLine"]] = relationship(back_populates="record")

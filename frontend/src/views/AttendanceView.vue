@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CalendarDaysIcon, CircleAlertIcon, Clock3Icon } from '@lucide/vue'
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import EmptyState from '@/components/EmptyState.vue'
@@ -23,20 +23,22 @@ import { formatDate, formatDateTime, personLabel } from '@/lib/format'
 import { attendanceStatusLabel, exceptionKindLabel, statusTone } from '@/lib/status'
 import { useAttendanceStore } from '@/stores/attendance'
 import { useSessionStore } from '@/stores/session'
-import type { AttendanceException, AttendanceSession } from '@/types/domain'
+import type { AttendanceException, AttendanceHome, AttendanceSession } from '@/types/domain'
 
 const session = useSessionStore()
 const attendance = useAttendanceStore()
-const data = computed(() => attendance.home)
+const page = ref<AttendanceHome | null>(null)
+const selectedMonth = ref('')
+const pageLoading = ref(false)
+const data = computed(() => page.value)
 const error = computed(() => attendance.error)
-const loading = computed(() => attendance.loading && !attendance.home)
+const loading = computed(() => (attendance.loading || pageLoading.value) && !page.value)
 const actionError = ref('')
 const actionStatus = ref('')
 const controlActionsReady = ref(false)
 
 const kindFilter = ref<'all' | 'missing_check_out' | 'correction_pending'>('all')
 const personFilter = ref('')
-const rangeFilter = ref<'week' | 'all'>('week')
 const correctionOpen = ref(false)
 const correctionSessionId = ref('')
 const proposedCheckIn = ref('')
@@ -78,18 +80,7 @@ function formatLongDate(value: string): string {
   }).format(date)
 }
 
-function inRollingWeek(workDate: string): boolean {
-  const end = new Date()
-  end.setHours(23, 59, 59, 999)
-  const start = new Date(end)
-  start.setDate(start.getDate() - 6)
-  start.setHours(0, 0, 0, 0)
-  const day = new Date(`${workDate}T12:00:00`)
-  if (Number.isNaN(day.getTime())) return false
-  return day >= start && day <= end
-}
-
-const todayIso = computed(() => localDateISO())
+const todayIso = computed(() => data.value?.today ?? localDateISO())
 
 const todaySession = computed(() => {
   const today = todayIso.value
@@ -111,10 +102,9 @@ const todayCheckIn = computed(
 
 const todayCheckOut = computed(() => todaySession.value?.check_out_at ?? null)
 
-const weekSessions = computed(() => {
-  const rows = data.value?.sessions ?? []
-  if (rangeFilter.value === 'all') return rows
-  return rows.filter((row) => row.work_date && inRollingWeek(row.work_date))
+const monthRows = computed(() => {
+  if (data.value?.days?.length) return data.value.days
+  return data.value?.sessions ?? []
 })
 
 const visibleExceptions = computed(() => {
@@ -142,15 +132,70 @@ const missingCheckOutCount = computed(
   () => (data.value?.exceptions ?? []).filter((row) => row.kind === 'missing_check_out').length,
 )
 
+async function loadPage() {
+  pageLoading.value = true
+  try {
+    const query = selectedMonth.value ? `?month=${encodeURIComponent(selectedMonth.value)}` : ''
+    const payload = await api<AttendanceHome>(`/api/attendance${query}`)
+    page.value = payload
+    if (payload.month && !selectedMonth.value) selectedMonth.value = payload.month
+    if (!correctionSessionId.value) {
+      correctionSessionId.value = payload.sessions[0]?.id ?? ''
+    }
+    if (!selectedExceptionId.value) {
+      selectedExceptionId.value = payload.exceptions[0]?.id ?? ''
+    }
+  } catch (err) {
+    actionError.value = err instanceof HttpError ? err.detail : 'Could not load attendance.'
+  } finally {
+    pageLoading.value = false
+  }
+}
+
+function shiftMonth(delta: number) {
+  const [yearText, monthText] = (selectedMonth.value || '2026-01').split('-')
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const next = new Date(year || 2026, (month || 1) - 1 + delta, 1)
+  selectedMonth.value = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`
+}
+
+function monthHeading(value: string): string {
+  if (!value) return 'This month'
+  const date = new Date(`${value}-01T00:00:00`)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(date)
+}
+
+function rowStatusLabel(
+  row: AttendanceSession | { id?: string; status?: string | null; check_out_at?: string | null; correction_status?: string | null },
+): string {
+  if ('id' in row && row.id) return sessionLabel(row as AttendanceSession)
+  return attendanceStatusLabel(row.status)
+}
+
 onMounted(async () => {
   await nextTick()
   controlActionsReady.value = Boolean(document.getElementById('control-actions'))
   await attendance.load()
-  const home = attendance.home
+  await loadPage()
+  const home = page.value
   if (!correctionSessionId.value) {
     correctionSessionId.value = home?.sessions[0]?.id ?? ''
   }
   selectedExceptionId.value = home?.exceptions[0]?.id ?? ''
+})
+
+watch(
+  () => attendance.revision,
+  (value, previous) => {
+    if (previous !== undefined) void loadPage()
+  },
+)
+
+watch(selectedMonth, (value, previous) => {
+  if (!previous || !value || value === page.value?.month) return
+  void loadPage()
 })
 
 function sessionLabel(row: AttendanceSession): string {
@@ -263,7 +308,8 @@ async function reviewCorrection(decision: 'APPROVED' | 'REJECTED') {
       body: JSON.stringify({ decision, comment: reviewComment.value.trim() || null }),
     })
     await attendance.load()
-    selectedExceptionId.value = attendance.home?.exceptions[0]?.id ?? ''
+    await loadPage()
+    selectedExceptionId.value = page.value?.exceptions[0]?.id ?? ''
     reviewComment.value = ''
     actionStatus.value =
       decision === 'APPROVED' ? 'Correction approved and attendance updated.' : 'Correction rejected.'
@@ -367,52 +413,70 @@ async function reviewCorrection(decision: 'APPROVED' | 'REJECTED') {
             </dl>
           </section>
 
-          <section class="week-block" aria-labelledby="week-heading">
+          <section class="week-block" aria-labelledby="month-heading">
             <div class="week-heading-row">
               <div class="section-title">
                 <CalendarDaysIcon class="section-icon" :stroke-width="1.75" aria-hidden="true" />
-                <h2 id="week-heading" class="mt-0 mb-0">This week</h2>
+                <h2 id="month-heading" class="mt-0 mb-0">{{ monthHeading(selectedMonth || data?.month || '') }}</h2>
               </div>
-              <label class="grid gap-1 text-sm font-medium">
-                <span class="sr-only">Date range</span>
-                <NativeSelect v-model="rangeFilter" class="w-36">
-                  <NativeSelectOption value="week">This week</NativeSelectOption>
-                  <NativeSelectOption value="all">All loaded</NativeSelectOption>
-                </NativeSelect>
-              </label>
+              <div class="flex flex-wrap items-end gap-2">
+                <label class="grid w-44 gap-1 text-sm font-medium">
+                  Month
+                  <Input v-model="selectedMonth" type="month" />
+                </label>
+                <Button type="button" variant="outline" size="sm" @click="shiftMonth(-1)">Previous month</Button>
+                <Button type="button" variant="outline" size="sm" @click="shiftMonth(1)">Next month</Button>
+              </div>
             </div>
+
+            <dl v-if="data?.summary" class="today-details mb-3">
+              <div>
+                <dt>Days present</dt>
+                <dd>{{ data.summary.days_present }}</dd>
+              </div>
+              <div>
+                <dt>Leave days</dt>
+                <dd>{{ data.summary.leave_days }}</dd>
+              </div>
+              <div>
+                <dt>Scheduled working days</dt>
+                <dd>{{ data.summary.scheduled_working_days }}</dd>
+              </div>
+            </dl>
 
             <div class="hidden sm:block">
               <Table>
-                <TableCaption class="sr-only">This week</TableCaption>
+                <TableCaption class="sr-only">Attendance month</TableCaption>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Work date</TableHead>
                     <TableHead>Check in</TableHead>
                     <TableHead>Check out</TableHead>
-                    <TableHead>Hours</TableHead>
+                    <TableHead>Work hours</TableHead>
+                    <TableHead>Extra hours</TableHead>
                     <TableHead>Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  <TableRow v-if="!weekSessions.length">
-                    <TableCell colspan="5">No sessions this week.</TableCell>
+                  <TableRow v-if="!monthRows.length">
+                    <TableCell colspan="6">No attendance this month.</TableCell>
                   </TableRow>
-                  <TableRow v-for="row in weekSessions" :key="row.id">
+                  <TableRow v-for="row in monthRows" :key="row.work_date ?? ('id' in row ? row.id : '')">
                     <TableCell>{{ formatDate(row.work_date) }}</TableCell>
                     <TableCell>{{ formatTime(row.check_in_at) }}</TableCell>
                     <TableCell>{{ formatTime(row.check_out_at) }}</TableCell>
                     <TableCell class="tabular-nums">{{ formatWorkedHours(row.worked_minutes) }}</TableCell>
+                    <TableCell class="tabular-nums">{{ formatWorkedHours(row.extra_minutes) }}</TableCell>
                     <TableCell>
-                      <StatusBadge :label="sessionLabel(row)" :tone="statusTone(sessionLabel(row))" />
+                      <StatusBadge :label="rowStatusLabel(row)" :tone="statusTone(rowStatusLabel(row))" />
                     </TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
             </div>
 
-            <div v-if="weekSessions.length" class="mobile-record-list">
-              <article v-for="row in weekSessions" :key="row.id" class="mobile-record">
+            <div v-if="monthRows.length" class="mobile-record-list">
+              <article v-for="row in monthRows" :key="row.work_date ?? ('id' in row ? row.id : '')" class="mobile-record">
                 <div class="mobile-record-row">
                   <span class="mobile-record-label">Work date</span>
                   <strong class="mobile-record-value">{{ formatDate(row.work_date) }}</strong>
@@ -426,16 +490,20 @@ async function reviewCorrection(decision: 'APPROVED' | 'REJECTED') {
                   <span class="mobile-record-value">{{ formatTime(row.check_out_at) }}</span>
                 </div>
                 <div class="mobile-record-row">
-                  <span class="mobile-record-label">Hours</span>
+                  <span class="mobile-record-label">Work hours</span>
                   <span class="mobile-record-value">{{ formatWorkedHours(row.worked_minutes) }}</span>
                 </div>
-                <StatusBadge :label="sessionLabel(row)" :tone="statusTone(sessionLabel(row))" />
+                <div class="mobile-record-row">
+                  <span class="mobile-record-label">Extra hours</span>
+                  <span class="mobile-record-value">{{ formatWorkedHours(row.extra_minutes) }}</span>
+                </div>
+                <StatusBadge :label="rowStatusLabel(row)" :tone="statusTone(rowStatusLabel(row))" />
               </article>
             </div>
             <EmptyState
               v-else
-              title="No sessions this week"
-              body="Your attendance sessions will appear here."
+              title="No attendance this month"
+              body="Your daily attendance will appear here."
             />
           </section>
         </div>
@@ -469,8 +537,46 @@ async function reviewCorrection(decision: 'APPROVED' | 'REJECTED') {
         </form>
       </template>
 
-      <!-- HR: exception register + review panel -->
+      <!-- HR: today roster + exception register + review panel -->
       <template v-else>
+        <section class="week-block mb-5" aria-labelledby="roster-heading">
+          <div class="section-title">
+            <Clock3Icon class="section-icon" :stroke-width="1.75" aria-hidden="true" />
+            <h2 id="roster-heading" class="mt-0 mb-0">Today</h2>
+          </div>
+          <p v-if="data?.today" class="today-date">{{ formatDate(data.today) }}</p>
+          <Table v-if="data?.roster?.length">
+            <TableCaption class="sr-only">Today roster</TableCaption>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Person</TableHead>
+                <TableHead>Check in</TableHead>
+                <TableHead>Check out</TableHead>
+                <TableHead>Work hours</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow v-for="row in data.roster" :key="row.employee_id">
+                <TableCell>
+                  <RouterLink class="text-[#017E84] underline" :to="`/employees/${row.employee_id}`">
+                    {{ personLabel(row.employee_name) }}
+                  </RouterLink>
+                </TableCell>
+                <TableCell>{{ formatTime(row.check_in_at) }}</TableCell>
+                <TableCell>{{ formatTime(row.check_out_at) }}</TableCell>
+                <TableCell class="tabular-nums">{{ formatWorkedHours(row.worked_minutes) }}</TableCell>
+                <TableCell>
+                  <StatusBadge
+                    :label="attendanceStatusLabel(row.status)"
+                    :tone="statusTone(attendanceStatusLabel(row.status))"
+                  />
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+          <EmptyState v-else title="No roster" body="Active employees for today appear here." />
+        </section>
         <div v-if="!controlActionsReady" class="mb-3 flex flex-wrap gap-3">
           <label class="grid max-w-xs min-w-48 flex-1 gap-1 text-sm font-medium">
             Person

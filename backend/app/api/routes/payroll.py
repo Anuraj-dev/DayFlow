@@ -15,6 +15,13 @@ from app.adapters.salary import (
 )
 from app.api.deps import CurrentPrincipal, get_current_principal, require_hr
 from app.core.db import get_db
+from app.domain.attendance import (
+    AttendanceStatus,
+    CorrectionStatus,
+    leave_dates_on_scheduled,
+    payable_summary_for_employee,
+    scheduled_dates,
+)
 from app.domain.payroll import (
     CalculationType,
     ComponentKind,
@@ -23,17 +30,25 @@ from app.domain.payroll import (
     PayrollPeriodStatus,
     assert_can_finalize,
     assert_can_publish,
+    assert_no_attendance_blockers,
+    prorate_computed_salary,
     signed_line_amount,
 )
 from app.domain.roles import Role
 from app.models import (
+    AttendanceCorrectionRequest,
+    AttendanceSession,
     AuditEvent,
     Employee,
+    Holiday,
+    LeaveRequest,
+    LeaveType,
     Organization,
     PayrollPeriod,
     PayrollRecord,
     PayrollRecordLine,
     SalaryComponent,
+    WorkPolicy,
 )
 from app.schemas.payroll import (
     EmployeeSalaryInputsOut,
@@ -186,9 +201,14 @@ async def payroll_home(
             {
                 "id": str(record.id),
                 "employee_id": str(record.employee_id),
+                "payroll_period_id": str(record.payroll_period_id),
+                "gross_amount": _money(record.gross_amount),
+                "deduction_amount": _money(record.deduction_amount),
                 "net_amount": _money(record.net_amount),
                 "currency": record.currency,
                 "published_at": record.published_at.isoformat() if record.published_at else None,
+                "scheduled_days": _money(record.scheduled_days) if record.scheduled_days is not None else None,
+                "payable_days": _money(record.payable_days) if record.payable_days is not None else None,
             }
             for record in records
         ],
@@ -307,6 +327,105 @@ def _period_action_out(period: PayrollPeriod, records: list[PayrollRecordDetailO
     )
 
 
+async def _period_work_calendar(
+    db: AsyncSession, organization_id: UUID, starts_on: date, ends_on: date
+) -> tuple[list[date], set[date]]:
+    policy = await db.scalar(select(WorkPolicy).where(WorkPolicy.organization_id == organization_id))
+    workweek = policy.workweek if policy and policy.workweek else [0, 1, 2, 3, 4]
+    holidays = set(await db.scalars(select(Holiday.date).where(Holiday.organization_id == organization_id)))
+    scheduled = scheduled_dates(starts_on, ends_on, workweek=workweek, holidays=holidays)
+    return scheduled, set(scheduled)
+
+
+async def _attendance_blockers(
+    db: AsyncSession, organization_id: UUID, starts_on: date, ends_on: date
+) -> tuple[int, int]:
+    open_session_count = len(
+        list(
+            await db.scalars(
+                select(AttendanceSession.id)
+                .join(Employee, Employee.id == AttendanceSession.employee_id)
+                .where(
+                    Employee.organization_id == organization_id,
+                    AttendanceSession.status == AttendanceStatus.OPEN.value,
+                    AttendanceSession.check_out_at.is_(None),
+                    AttendanceSession.work_date >= starts_on,
+                    AttendanceSession.work_date <= ends_on,
+                )
+            )
+        )
+    )
+    pending_correction_count = len(
+        list(
+            await db.scalars(
+                select(AttendanceCorrectionRequest.id)
+                .join(
+                    AttendanceSession,
+                    AttendanceSession.id == AttendanceCorrectionRequest.attendance_session_id,
+                )
+                .join(Employee, Employee.id == AttendanceSession.employee_id)
+                .where(
+                    Employee.organization_id == organization_id,
+                    AttendanceCorrectionRequest.status == CorrectionStatus.PENDING.value,
+                    AttendanceSession.work_date >= starts_on,
+                    AttendanceSession.work_date <= ends_on,
+                )
+            )
+        )
+    )
+    return open_session_count, pending_correction_count
+
+
+async def _period_leave_dates(
+    db: AsyncSession,
+    organization_id: UUID,
+    scheduled: set[date],
+    starts_on: date,
+    ends_on: date,
+) -> tuple[dict[UUID, set[date]], dict[UUID, set[date]]]:
+    rows = (
+        await db.execute(
+            select(LeaveRequest.employee_id, LeaveRequest.starts_on, LeaveRequest.ends_on, LeaveType.is_paid)
+            .join(LeaveType, LeaveType.id == LeaveRequest.leave_type_id)
+            .join(Employee, Employee.id == LeaveRequest.employee_id)
+            .where(
+                Employee.organization_id == organization_id,
+                LeaveRequest.status == "APPROVED",
+                LeaveRequest.starts_on <= ends_on,
+                LeaveRequest.ends_on >= starts_on,
+            )
+        )
+    ).all()
+    paid: dict[UUID, set[date]] = {}
+    unpaid: dict[UUID, set[date]] = {}
+    for employee_id, leave_start, leave_end, is_paid in rows:
+        covered = leave_dates_on_scheduled(leave_start, leave_end, scheduled=scheduled)
+        target = paid if is_paid else unpaid
+        target.setdefault(employee_id, set()).update(covered)
+    return paid, unpaid
+
+
+async def _period_session_status(
+    db: AsyncSession, organization_id: UUID, starts_on: date, ends_on: date
+) -> dict[tuple[UUID, date], str]:
+    rows = list(
+        await db.scalars(
+            select(AttendanceSession)
+            .join(Employee, Employee.id == AttendanceSession.employee_id)
+            .where(
+                Employee.organization_id == organization_id,
+                AttendanceSession.work_date >= starts_on,
+                AttendanceSession.work_date <= ends_on,
+            )
+            .order_by(AttendanceSession.check_in_at)
+        )
+    )
+    by_day: dict[tuple[UUID, date], str] = {}
+    for row in rows:
+        by_day[(row.employee_id, row.work_date)] = row.status
+    return by_day
+
+
 @router.post("/periods/{period_id}/finalize", response_model=PayrollPeriodActionOut)
 async def finalize_period(
     period_id: UUID,
@@ -319,8 +438,25 @@ async def finalize_period(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found.")
     try:
         assert_can_finalize(status=PayrollPeriodStatus(period.status), net=Decimal("0.00"))
+        open_session_count, pending_correction_count = await _attendance_blockers(
+            db, principal.organization_id, period.starts_on, period.ends_on
+        )
+        assert_no_attendance_blockers(
+            open_session_count=open_session_count,
+            pending_correction_count=pending_correction_count,
+        )
     except PayrollError as exc:
         _raise_payroll(exc, conflict=True)
+
+    scheduled, scheduled_set = await _period_work_calendar(
+        db, principal.organization_id, period.starts_on, period.ends_on
+    )
+    paid_leave, unpaid_leave = await _period_leave_dates(
+        db, principal.organization_id, scheduled_set, period.starts_on, period.ends_on
+    )
+    session_status = await _period_session_status(
+        db, principal.organization_id, period.starts_on, period.ends_on
+    )
 
     components = {
         component.code.upper(): component
@@ -330,16 +466,34 @@ async def finalize_period(
             )
         ).all()
     }
-    snapshots: list[tuple[UUID, ComputedSalary, list[tuple[SalaryComponent | None, Decimal, str, str]]]] = []
+    snapshots: list[
+        tuple[UUID, ComputedSalary, Decimal, Decimal, list[tuple[SalaryComponent | None, Decimal, str, str]]]
+    ] = []
     period_net = Decimal("0.00")
     try:
         for employee, _wage, computed in await list_org_computed_salaries(
             db, principal.organization_id, period.ends_on
         ):
-            assert_can_finalize(status=PayrollPeriodStatus(period.status), net=computed.net_amount)
-            period_net += computed.net_amount
+            employee_sessions = {
+                day: status
+                for (owner_id, day), status in session_status.items()
+                if owner_id == employee.id
+            }
+            totals = payable_summary_for_employee(
+                scheduled=scheduled,
+                session_status_by_date=employee_sessions,
+                paid_leave_dates=paid_leave.get(employee.id, set()),
+                unpaid_leave_dates=unpaid_leave.get(employee.id, set()),
+            )
+            prorated = prorate_computed_salary(
+                computed,
+                payable_days=totals.payable_days,
+                scheduled_days=totals.scheduled_days,
+            )
+            assert_can_finalize(status=PayrollPeriodStatus(period.status), net=prorated.net_amount)
+            period_net += prorated.net_amount
             lines = []
-            for line in computed.lines:
+            for line in prorated.lines:
                 component = components.get(line.code)
                 lines.append(
                     (
@@ -349,7 +503,7 @@ async def finalize_period(
                         line.kind.value,
                     )
                 )
-            snapshots.append((employee.id, computed, lines))
+            snapshots.append((employee.id, prorated, totals.scheduled_days, totals.payable_days, lines))
     except PayrollError as exc:
         _raise_payroll(exc, conflict=str(exc) == "Only a draft payroll period can be finalized.")
 
@@ -362,7 +516,7 @@ async def finalize_period(
 
     now = datetime.now(UTC)
     record_outs: list[PayrollRecordDetailOut] = []
-    for employee_id, computed, lines in snapshots:
+    for employee_id, computed, scheduled_days, payable_days, lines in snapshots:
         record = PayrollRecord(
             payroll_period_id=period.id,
             employee_id=employee_id,
@@ -371,6 +525,8 @@ async def finalize_period(
             net_amount=computed.net_amount,
             currency=org.currency,
             published_at=None,
+            scheduled_days=scheduled_days,
+            payable_days=payable_days,
         )
         db.add(record)
         await db.flush()
@@ -401,6 +557,8 @@ async def finalize_period(
                 net_amount=computed.net_amount,
                 currency=org.currency,
                 published_at=None,
+                scheduled_days=scheduled_days,
+                payable_days=payable_days,
                 lines=line_outs,
             )
         )
@@ -460,6 +618,8 @@ async def _record_details(db: AsyncSession, period_id: UUID) -> list[PayrollReco
                 net_amount=record.net_amount,
                 currency=record.currency,
                 published_at=record.published_at,
+                scheduled_days=record.scheduled_days,
+                payable_days=record.payable_days,
                 lines=line_outs,
             )
         )

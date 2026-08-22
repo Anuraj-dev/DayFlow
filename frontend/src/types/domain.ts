@@ -88,7 +88,9 @@ export interface AttendanceSession {
   status?: string
   source?: string
   worked_minutes?: number | null
+  extra_minutes?: number | null
   correction_status?: string | null
+  scheduled?: boolean
 }
 
 export interface AttendanceException {
@@ -105,12 +107,44 @@ export interface AttendanceException {
   reason?: string | null
 }
 
+export interface AttendanceDay {
+  work_date: string
+  check_in_at: string | null
+  check_out_at: string | null
+  worked_minutes: number | null
+  extra_minutes: number
+  status: string
+  scheduled?: boolean
+}
+
+export interface AttendanceSummary {
+  days_present: number
+  leave_days: number
+  scheduled_working_days: number
+}
+
+export interface AttendanceRosterRow {
+  employee_id: string
+  employee_name: string
+  check_in_at: string | null
+  check_out_at: string | null
+  worked_minutes?: number | null
+  extra_minutes?: number
+  status: string
+}
+
 export interface AttendanceHome {
   role: string
   employee_id: string | null
   sessions: AttendanceSession[]
   open_session: { id: string; check_in_at: string } | null
   exceptions: AttendanceException[]
+  month?: string
+  today?: string | null
+  full_day_minutes?: number
+  summary?: AttendanceSummary | null
+  days?: AttendanceDay[]
+  roster?: AttendanceRosterRow[]
 }
 
 export interface LeaveRequest {
@@ -161,6 +195,8 @@ export interface PayrollRecord {
   net_amount: string
   currency: string
   published_at: string | null
+  scheduled_days?: string | null
+  payable_days?: string | null
   lines?: PayrollRecordLine[]
 }
 

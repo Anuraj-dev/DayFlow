@@ -15,6 +15,7 @@ class AttendanceSessionOut(BaseModel):
     source: str
     status: str
     worked_minutes: int | None
+    extra_minutes: int = 0
 
 
 class OpenSessionOut(BaseModel):
@@ -36,12 +37,44 @@ class AttendanceExceptionOut(BaseModel):
     reason: str | None = None
 
 
+class AttendanceDayOut(BaseModel):
+    work_date: date
+    check_in_at: datetime | None = None
+    check_out_at: datetime | None = None
+    worked_minutes: int | None = None
+    extra_minutes: int = 0
+    status: str
+    scheduled: bool = True
+
+
+class AttendanceMonthSummary(BaseModel):
+    days_present: float
+    leave_days: float
+    scheduled_working_days: int
+
+
+class AttendanceRosterRow(BaseModel):
+    employee_id: UUID
+    employee_name: str
+    check_in_at: datetime | None = None
+    check_out_at: datetime | None = None
+    worked_minutes: int | None = None
+    extra_minutes: int = 0
+    status: str
+
+
 class AttendanceHome(BaseModel):
     role: str
     employee_id: UUID | None
     sessions: list[AttendanceSessionOut]
     open_session: OpenSessionOut | None
     exceptions: list[AttendanceExceptionOut]
+    month: str | None = None
+    today: date | None = None
+    full_day_minutes: int = 480
+    summary: AttendanceMonthSummary | None = None
+    days: list[AttendanceDayOut] = []
+    roster: list[AttendanceRosterRow] = []
 
 
 class CorrectionCreateRequest(BaseModel):

@@ -3,7 +3,20 @@ from decimal import Decimal
 
 import pytest
 
-from app.domain.attendance import AttendanceError, can_check_in, can_check_out, derive_day_status, derive_presence
+from app.domain.attendance import (
+    AttendanceError,
+    AttendanceStatus,
+    DayPayableInput,
+    can_check_in,
+    can_check_out,
+    derive_day_status,
+    derive_presence,
+    extra_minutes,
+    parse_year_month,
+    payable_units_for_day,
+    scheduled_dates,
+    summarize_payable_days,
+)
 from app.domain.identity import (
     IdentityError,
     assert_employee_patch_allowed,
@@ -26,9 +39,11 @@ from app.domain.payroll import (
     PayrollPeriodStatus,
     SalaryStructureLine,
     assert_mutable,
+    assert_no_attendance_blockers,
     compute_salary,
     default_salary_structure,
     net_amount,
+    prorate_computed_salary,
 )
 from app.domain.roles import Role
 
@@ -232,3 +247,95 @@ def test_negative_values_and_cycles_are_rejected():
     ]
     with pytest.raises(PayrollError, match="HRA"):
         compute_salary(Decimal("50000.00"), bonus_of_basic)
+
+
+def test_extra_minutes_are_only_the_overflow_past_a_full_day():
+    assert extra_minutes(None, 480) == 0
+    assert extra_minutes(480, 480) == 0
+    assert extra_minutes(420, 480) == 0
+    assert extra_minutes(540, 480) == 60
+
+
+def test_parse_year_month_and_scheduled_days_skip_weekends_and_holidays():
+    start, end = parse_year_month("2026-08")
+    assert start == date(2026, 8, 1)
+    assert end == date(2026, 8, 31)
+    with pytest.raises(AttendanceError, match="YYYY-MM"):
+        parse_year_month("2026/08")
+    days = scheduled_dates(
+        date(2026, 8, 10),
+        date(2026, 8, 16),
+        workweek=[0, 1, 2, 3, 4],
+        holidays={date(2026, 8, 12)},
+    )
+    assert days == [date(2026, 8, 10), date(2026, 8, 11), date(2026, 8, 13), date(2026, 8, 14)]
+
+
+def test_payable_days_count_half_day_paid_leave_unpaid_leave_and_missing():
+    assert payable_units_for_day(
+        scheduled=True, status=AttendanceStatus.PRESENT.value, on_paid_leave=False, on_unpaid_leave=False
+    ) == Decimal("1")
+    assert payable_units_for_day(
+        scheduled=True, status=AttendanceStatus.LATE.value, on_paid_leave=False, on_unpaid_leave=False
+    ) == Decimal("1")
+    assert payable_units_for_day(
+        scheduled=True, status=AttendanceStatus.HALF_DAY.value, on_paid_leave=False, on_unpaid_leave=False
+    ) == Decimal("0.5")
+    assert payable_units_for_day(
+        scheduled=True, status=AttendanceStatus.ABSENT.value, on_paid_leave=True, on_unpaid_leave=False
+    ) == Decimal("1")
+    assert payable_units_for_day(
+        scheduled=True, status=None, on_paid_leave=False, on_unpaid_leave=True
+    ) == Decimal("0")
+    assert payable_units_for_day(
+        scheduled=True, status=None, on_paid_leave=False, on_unpaid_leave=False
+    ) == Decimal("0")
+
+    summary = summarize_payable_days(
+        [
+            DayPayableInput(work_date=date(2026, 8, 10), scheduled=True, status="PRESENT"),
+            DayPayableInput(work_date=date(2026, 8, 11), scheduled=True, status="HALF_DAY"),
+            DayPayableInput(work_date=date(2026, 8, 12), scheduled=False, status=None),
+            DayPayableInput(
+                work_date=date(2026, 8, 13),
+                scheduled=True,
+                status="ABSENT",
+                on_paid_leave=True,
+            ),
+            DayPayableInput(
+                work_date=date(2026, 8, 14),
+                scheduled=True,
+                status=None,
+                on_unpaid_leave=True,
+            ),
+            DayPayableInput(work_date=date(2026, 8, 15), scheduled=False),
+        ]
+    )
+    assert summary.scheduled_days == Decimal("4")
+    assert summary.payable_days == Decimal("2.5")
+    assert summary.days_present == Decimal("1.5")
+    assert summary.leave_days == Decimal("2")
+
+
+def test_prorate_earnings_by_payable_days_recomputes_pf_keeps_professional_tax():
+    full = compute_salary(Decimal("50000.00"), default_salary_structure())
+    prorated = prorate_computed_salary(full, payable_days=Decimal("20"), scheduled_days=Decimal("22"))
+    assert _line_amount(prorated, "BASIC") == Decimal("22727.27")
+    assert _line_amount(prorated, "HRA") == Decimal("11363.64")
+    assert _line_amount(prorated, "PF") == Decimal("2727.27")
+    assert _line_amount(prorated, "PF_EMPLOYER") == Decimal("2727.27")
+    assert _line_amount(prorated, "PT") == Decimal("200.00")
+    assert _line_amount(prorated, "PF") == (Decimal("22727.27") * Decimal("0.12")).quantize(Decimal("0.01"))
+    unchanged = prorate_computed_salary(full, payable_days=Decimal("22"), scheduled_days=Decimal("22"))
+    assert unchanged.gross_amount == full.gross_amount
+    assert unchanged.net_amount == full.net_amount
+    with pytest.raises(PayrollError, match="scheduled working days"):
+        prorate_computed_salary(full, payable_days=Decimal("0"), scheduled_days=Decimal("0"))
+
+
+def test_open_sessions_and_pending_corrections_block_finalization():
+    assert_no_attendance_blockers(open_session_count=0, pending_correction_count=0)
+    with pytest.raises(PayrollError, match="Open attendance sessions"):
+        assert_no_attendance_blockers(open_session_count=1, pending_correction_count=0)
+    with pytest.raises(PayrollError, match="Pending attendance corrections"):
+        assert_no_attendance_blockers(open_session_count=0, pending_correction_count=1)

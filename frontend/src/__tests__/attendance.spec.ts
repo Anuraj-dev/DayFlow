@@ -188,11 +188,14 @@ describe('Employee attendance', () => {
     expect(wrapper.text()).toMatch(/Checked in/i)
   })
 
-  it('lists the week with present, late, missing check-out, leave, half-day, and correction requested', async () => {
+  it('lists the selected month with present, late, missing check-out, leave, half-day, and correction requested', async () => {
     fetchMock.mockImplementation(() =>
       jsonResponse(
         200,
         home({
+          month: '2026-08',
+          full_day_minutes: 480,
+          summary: { days_present: 2.5, leave_days: 1, scheduled_working_days: 21 },
           sessions: [
             {
               id: 's-present',
@@ -244,13 +247,18 @@ describe('Employee attendance', () => {
 
     const wrapper = await mountAttendance('EMPLOYEE')
     const table = wrapper.get('table')
-    expect(table.text()).toMatch(/This week|Work date/)
+    expect(table.text()).toMatch(/Work date/)
+    expect(wrapper.text()).toMatch(/August 2026|2026-08/)
+    expect(wrapper.text()).toMatch(/Days present/)
+    expect(wrapper.text()).toMatch(/Leave days/)
+    expect(wrapper.text()).toMatch(/Scheduled working days/)
+    expect(wrapper.text()).toMatch(/Work hours/)
+    expect(wrapper.text()).toMatch(/Extra hours/)
     expect(wrapper.text()).toMatch(/Present/)
     expect(wrapper.text()).toMatch(/Late/)
     expect(wrapper.text()).toMatch(/Missing check-out/)
     expect(wrapper.text()).toMatch(/Leave|On leave/)
     expect(wrapper.text()).toMatch(/Half-day/)
-    expect(wrapper.text()).toMatch(/Correction requested/)
 
     const tones = wrapper.findAll('[data-tone]').map((node) => ({
       text: node.text().trim(),
@@ -300,6 +308,37 @@ describe('Employee attendance', () => {
       ),
     ).toBe(true)
     expect(wrapper.get('[role="alert"]').text()).toMatch(/not implemented|correction/i)
+  })
+
+  it('requests another month from the month navigator', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      const month = url.includes('month=2026-07') ? '2026-07' : '2026-08'
+      return jsonResponse(
+        200,
+        home({
+          month,
+          summary: { days_present: month === '2026-07' ? 18 : 3.5, leave_days: 1, scheduled_working_days: 22 },
+          days: [
+            {
+              work_date: `${month}-03`,
+              check_in_at: `${month}-03T03:30:00Z`,
+              check_out_at: `${month}-03T12:30:00Z`,
+              worked_minutes: 540,
+              extra_minutes: 60,
+              status: 'PRESENT',
+            },
+          ],
+        }),
+      )
+    })
+
+    const wrapper = await mountAttendance('EMPLOYEE')
+    expect(wrapper.text()).toMatch(/August 2026|2026-08/)
+    await inputByLabel(wrapper, 'Month').setValue('2026-07')
+    await flushPromises()
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('month=2026-07'))).toBe(true)
+    expect(wrapper.text()).toMatch(/July 2026|2026-07/)
   })
 })
 
@@ -365,6 +404,47 @@ describe('HR attendance review', () => {
     expect(wrapper.get('table').text()).toMatch(/Nia Shah/)
     expect(wrapper.get('table').text()).not.toMatch(/Rohan Iyer/)
     expect(wrapper.text()).not.toMatch(/This week/)
+    expect(wrapper.text()).toMatch(/Today/)
+  })
+
+  it('renders today roster plus the existing exception queue', async () => {
+    fetchMock.mockImplementation(() =>
+      jsonResponse(
+        200,
+        home({
+          role: 'HR',
+          today: '2026-08-22',
+          roster: [
+            {
+              employee_id: SELF_ID,
+              employee_name: 'Rohan Iyer',
+              check_in_at: '2026-08-22T03:30:00Z',
+              check_out_at: '2026-08-22T12:30:00Z',
+              worked_minutes: 540,
+              extra_minutes: 60,
+              status: 'PRESENT',
+            },
+          ],
+          exceptions: [
+            {
+              id: 'ex-open',
+              employee_id: SELF_ID,
+              employee_name: 'Rohan Iyer',
+              kind: 'missing_check_out',
+              status: 'OPEN',
+            },
+          ],
+        }),
+      ),
+    )
+
+    const wrapper = await mountAttendance('HR')
+    const tables = wrapper.findAll('table')
+    expect(tables.length).toBeGreaterThan(0)
+    expect(tables[0]?.text()).toMatch(/Rohan Iyer/)
+    expect(tables[0]?.text()).toMatch(/Present/)
+    expect(wrapper.text()).toMatch(/Today/)
+    expect(wrapper.text()).toMatch(/Missing check-out/)
   })
 
   it('shows correction evidence and sends an HR approval', async () => {

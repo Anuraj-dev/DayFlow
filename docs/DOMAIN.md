@@ -43,6 +43,16 @@ Domain model and rules for the hackathon MVP. This is not an API spec or a migra
 
 - `id`, `employee_id`, `work_date`, `check_in_at`, `check_out_at`, `source`, `status`, `worked_minutes`
 - At most one open session per employee unless split shifts are explicitly supported
+- Extra minutes are `max(0, worked_minutes - full_day_minutes)` and are derived in domain math, not stored
+
+Payable days (attendance → payroll)
+
+- Scheduled working days exclude policy weekends and holidays
+- `PRESENT` and `LATE` count 1 payable day; `HALF_DAY` counts 0.5
+- Approved paid leave on a scheduled day counts 1; unpaid leave, absence, and missing attendance count 0
+- Leave is not also counted as an absence
+- Employee attendance is a selected organization-local month (default current month) with daily punches, worked/extra minutes, status, and summary counts (days present, leave days, scheduled working days)
+- HR attendance is today's org-scoped roster plus the exception queue
 
 `attendance_correction_requests`
 
@@ -102,9 +112,11 @@ Payroll is a monthly wage split. Domain math in `backend/app/domain/payroll.py` 
 
 `payroll_records`
 
-- `id`, `payroll_period_id`, `employee_id`, `gross_amount`, `deduction_amount`, `net_amount`, `currency`, `payslip_storage_key`, `published_at`
-- Gross is the sum of earnings, which equals monthly wage when the structure is valid
+- `id`, `payroll_period_id`, `employee_id`, `gross_amount`, `deduction_amount`, `net_amount`, `currency`, `payslip_storage_key`, `published_at`, `scheduled_days`, `payable_days`
+- Gross is the sum of earnings, which equals monthly wage when the structure is valid and payable days equal scheduled days
+- Finalization prorates every earning by `payable_days / scheduled_days`. Employee and employer PF are 12% of the prorated Basic. Professional tax stays ₹200 and is not prorated
 - Deduction amount is employee PF + professional tax. Employer PF is informational and does not reduce net pay
+- Open sessions or pending corrections whose work date falls in the period block finalization
 - Finalized records are immutable. A later salary change does not rewrite a snapshot
 
 `payroll_record_lines`
@@ -150,7 +162,7 @@ Organization
 6. Rejection requires a comment. Approval records the balance used.
 7. Employees can read org directory cards and coworker profiles in view-only form. They cannot edit another person's record. Attendance, leave, documents, and payroll stay self-or-HR.
 8. Employees cannot edit job, role, salary, balance, attendance history, or approval fields.
-9. Finalized payroll records are immutable. A correction creates a new revision or adjustment period.
+9. Finalized payroll records are immutable. A correction creates a new revision or adjustment period. Finalization snapshots scheduled and payable days and prorates earnings from attendance; professional tax stays ₹200.
 10. File downloads require short-lived authorized URLs.
 
 Implement these in `backend/app/domain`. Routes call domain functions; they do not re-encode the rules.
@@ -170,7 +182,7 @@ Implement these in `backend/app/domain`. Routes call domain functions; they do n
 | Corrections | Employee requests, HR decides, audit event always recorded |
 | Weekends and holidays | Excluded from leave day count by policy |
 | Leave cancellation | Employee can cancel pending requests; approved leave needs HR reversal |
-| Payroll engine | Monthly wage split with PF (12% of Basic) and professional tax ₹200; no broader tax engine |
+| Payroll engine | Monthly wage split with PF (12% of Basic, using prorated Basic) and professional tax ₹200; earnings prorated by payable/scheduled days; no broader tax engine |
 | Payslip | Generated only after HR finalizes and publishes a period |
 | Documents | Private storage with HR/self access, size and type limits. Tab may stay deferred |
 | Notifications | In-app activity only; email stays future work except account security |

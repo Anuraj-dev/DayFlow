@@ -634,3 +634,150 @@ async def test_correction_without_checkout_keeps_existing_checkout(client: Async
     assert row["check_in_at"].startswith("2026-08-21T03:45:00")
     assert row["check_out_at"].startswith("2026-08-21T12:00:00")
     assert row["status"] != "OPEN"
+
+
+async def test_employee_month_defaults_to_org_local_month_with_hours_and_summary(client: AsyncClient):
+    from zoneinfo import ZoneInfo
+
+    from sqlalchemy import select
+
+    from app.domain.attendance import scheduled_dates
+    from app.models import Holiday, LeaveType, WorkPolicy
+
+    email, password = await _create_active_employee()
+    actor = await _sign_in(client, email, password)
+    headers = {"Authorization": f"Bearer {actor['access_token']}"}
+    employee_id = actor["user"]["employee_id"]
+
+    async with SessionLocal() as db:
+        org = await db.scalar(select_org())
+        assert org is not None
+        today = datetime.now(UTC).astimezone(ZoneInfo(org.timezone)).date()
+        policy = await db.scalar(select(WorkPolicy).where(WorkPolicy.organization_id == org.id))
+        assert policy is not None
+        paid = await db.scalar(
+            select(LeaveType).where(LeaveType.organization_id == org.id, LeaveType.code == "PAID")
+        )
+        unpaid = await db.scalar(
+            select(LeaveType).where(LeaveType.organization_id == org.id, LeaveType.code == "UNPAID")
+        )
+        assert paid is not None and unpaid is not None
+        present_day = date(2026, 8, 3)
+        half_day = date(2026, 8, 4)
+        leave_day = date(2026, 8, 5)
+        unpaid_day = date(2026, 8, 6)
+        holiday = date(2026, 8, 7)
+        db.add(Holiday(organization_id=org.id, name="Test holiday", date=holiday))
+        db.add_all(
+            [
+                AttendanceSession(
+                    employee_id=employee_id,
+                    work_date=present_day,
+                    check_in_at=datetime(2026, 8, 3, 3, 30, tzinfo=UTC),
+                    check_out_at=datetime(2026, 8, 3, 12, 30, tzinfo=UTC),
+                    source="SERVER",
+                    status="PRESENT",
+                    worked_minutes=540,
+                ),
+                AttendanceSession(
+                    employee_id=employee_id,
+                    work_date=half_day,
+                    check_in_at=datetime(2026, 8, 4, 3, 30, tzinfo=UTC),
+                    check_out_at=datetime(2026, 8, 4, 7, 30, tzinfo=UTC),
+                    source="SERVER",
+                    status="HALF_DAY",
+                    worked_minutes=240,
+                ),
+                LeaveRequest(
+                    employee_id=employee_id,
+                    leave_type_id=paid.id,
+                    starts_on=leave_day,
+                    ends_on=leave_day,
+                    counted_days=1,
+                    reason="Paid day",
+                    status="APPROVED",
+                    submitted_at=datetime.now(UTC),
+                ),
+                LeaveRequest(
+                    employee_id=employee_id,
+                    leave_type_id=unpaid.id,
+                    starts_on=unpaid_day,
+                    ends_on=unpaid_day,
+                    counted_days=1,
+                    reason="Unpaid day",
+                    status="APPROVED",
+                    submitted_at=datetime.now(UTC),
+                ),
+            ]
+        )
+        await db.commit()
+
+    listed = await client.get("/api/attendance", headers=headers)
+    assert listed.status_code == 200
+    body = listed.json()
+    assert body["month"] == f"{today.year:04d}-{today.month:02d}"
+    assert body["full_day_minutes"] == 480
+    assert body["summary"] is not None
+
+    august = await client.get("/api/attendance", headers=headers, params={"month": "2026-08"})
+    assert august.status_code == 200
+    payload = august.json()
+    assert payload["month"] == "2026-08"
+    by_date = {row["work_date"]: row for row in payload["days"]}
+    assert by_date["2026-08-03"]["worked_minutes"] == 540
+    assert by_date["2026-08-03"]["extra_minutes"] == 60
+    assert by_date["2026-08-03"]["status"] == "PRESENT"
+    assert by_date["2026-08-04"]["status"] == "HALF_DAY"
+    assert by_date["2026-08-05"]["status"] == "LEAVE"
+    assert by_date["2026-08-06"]["status"] == "LEAVE"
+    assert by_date["2026-08-07"]["scheduled"] is False
+    assert by_date["2026-08-07"]["status"] == "NOT_SCHEDULED"
+    assert payload["summary"]["days_present"] == 1.5
+    assert payload["summary"]["leave_days"] == 2
+    async with SessionLocal() as db:
+        org = await db.scalar(select_org())
+        assert org is not None
+        policy = await db.scalar(select(WorkPolicy).where(WorkPolicy.organization_id == org.id))
+        holidays = set(await db.scalars(select(Holiday.date).where(Holiday.organization_id == org.id)))
+        expected_scheduled = len(
+            scheduled_dates(
+                date(2026, 8, 1),
+                date(2026, 8, 31),
+                workweek=policy.workweek if policy and policy.workweek else [0, 1, 2, 3, 4],
+                holidays=holidays,
+            )
+        )
+    assert payload["summary"]["scheduled_working_days"] == expected_scheduled
+
+    bad = await client.get("/api/attendance", headers=headers, params={"month": "2026/08"})
+    assert bad.status_code == 400
+
+
+async def test_hr_today_roster_is_org_scoped(client: AsyncClient):
+    from zoneinfo import ZoneInfo
+
+    email, password = await _create_active_employee()
+    actor = await _sign_in(client, email, password)
+    headers = {"Authorization": f"Bearer {actor['access_token']}"}
+    employee_id = actor["user"]["employee_id"]
+    inbound = await client.post("/api/attendance/check-in", headers=headers)
+    assert inbound.status_code == 200
+
+    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
+    hr_headers = {"Authorization": f"Bearer {hr['access_token']}"}
+    listed = await client.get("/api/attendance", headers=hr_headers)
+    assert listed.status_code == 200
+    body = listed.json()
+    assert body["role"] == "HR"
+    assert body["roster"]
+    row = next(item for item in body["roster"] if item["employee_id"] == employee_id)
+    assert row["status"] == "OPEN"
+    assert row["check_in_at"] == inbound.json()["check_in_at"]
+    names = {item["employee_name"] for item in body["roster"]}
+    assert "Rohan Iyer" in names or any("Iyer" in name for name in names)
+
+    async with SessionLocal() as db:
+        org = await db.scalar(select_org())
+        assert org is not None
+        today = datetime.now(UTC).astimezone(ZoneInfo(org.timezone)).date()
+    assert body["today"] == today.isoformat()
