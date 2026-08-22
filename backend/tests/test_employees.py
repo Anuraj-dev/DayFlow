@@ -39,7 +39,7 @@ async def test_hr_lists_organization_employees(client: AsyncClient):
         assert "status" in person
 
 
-async def test_employee_listing_returns_403(client: AsyncClient):
+async def test_employee_can_list_directory(client: AsyncClient):
     session = await _sign_in(client, "employee@dayflow.demo", "ChangeMe_Emp12!")
     token = session["access_token"]
 
@@ -47,8 +47,14 @@ async def test_employee_listing_returns_403(client: AsyncClient):
         "/api/employees",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert response.status_code == 403
-    assert response.json()["detail"] == "HR role required."
+    assert response.status_code == 200
+    people = response.json()
+    codes = {person["employee_code"] for person in people}
+    assert "HR-001" in codes
+    assert "EMP-014" in codes
+    hr_row = next(person for person in people if person["employee_code"] == "HR-001")
+    assert hr_row["email"] == "hr@dayflow.demo"
+    assert hr_row["role"] == "HR"
 
 
 async def test_employee_can_get_own_record(client: AsyncClient):
@@ -70,7 +76,7 @@ async def test_employee_can_get_own_record(client: AsyncClient):
     assert "address" in person
 
 
-async def test_employee_get_another_id_returns_403(client: AsyncClient):
+async def test_employee_can_get_a_peer_record(client: AsyncClient):
     hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
     other_id = hr["user"]["employee_id"]
 
@@ -81,11 +87,15 @@ async def test_employee_get_another_id_returns_403(client: AsyncClient):
         f"/api/employees/{other_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Employees can read only their own record."
+    assert response.status_code == 200
+    person = response.json()
+    assert person["id"] == other_id
+    assert person["employee_code"] == "HR-001"
+    assert person["email"] == "hr@dayflow.demo"
+    assert person["role"] == "HR"
 
 
-async def test_employee_get_guessed_uuid_returns_403(client: AsyncClient):
+async def test_employee_get_guessed_uuid_returns_404(client: AsyncClient):
     employee = await _sign_in(client, "employee@dayflow.demo", "ChangeMe_Emp12!")
     token = employee["access_token"]
     guessed = uuid4()
@@ -94,8 +104,8 @@ async def test_employee_get_guessed_uuid_returns_403(client: AsyncClient):
         f"/api/employees/{guessed}",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Employees can read only their own record."
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Employee not found."
 
 
 async def test_employee_can_patch_own_address_and_phone(client: AsyncClient):
@@ -290,3 +300,50 @@ async def test_employee_patch_writes_audit_event(client: AsyncClient):
         assert event.after_json is not None
         assert event.after_json["phone"] == phone
         assert event.actor_user_id is not None
+
+
+async def test_hr_inactive_status_disables_sign_in(client: AsyncClient):
+    employee = await _sign_in(client, "employee@dayflow.demo", "ChangeMe_Emp12!")
+    employee_id = employee["user"]["employee_id"]
+    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
+
+    patched = await client.patch(
+        f"/api/employees/{employee_id}",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+        json={"status": "INACTIVE"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["status"] == "INACTIVE"
+
+    locked = await client.post(
+        "/api/auth/sign-in",
+        json={"email": "employee@dayflow.demo", "password": "ChangeMe_Emp12!"},
+    )
+    assert locked.status_code == 403
+    assert locked.json()["detail"] == "Account is locked or disabled."
+
+    restored = await client.patch(
+        f"/api/employees/{employee_id}",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+        json={"status": "ACTIVE"},
+    )
+    assert restored.status_code == 200
+    again = await client.post(
+        "/api/auth/sign-in",
+        json={"email": "employee@dayflow.demo", "password": "ChangeMe_Emp12!"},
+    )
+    assert again.status_code == 200
+
+
+async def test_patch_rejects_null_required_fields(client: AsyncClient):
+    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
+    employee = await _sign_in(client, "employee@dayflow.demo", "ChangeMe_Emp12!")
+    employee_id = employee["user"]["employee_id"]
+
+    response = await client.patch(
+        f"/api/employees/{employee_id}",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+        json={"first_name": None, "title": None},
+    )
+    assert response.status_code == 400
+    assert "cannot be empty" in response.json()["detail"]

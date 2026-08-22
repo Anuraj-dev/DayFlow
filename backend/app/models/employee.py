@@ -15,7 +15,11 @@ if TYPE_CHECKING:
 
 class Employee(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "employees"
-    __table_args__ = (UniqueConstraint("organization_id", "employee_code"),)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "employee_code"),
+        UniqueConstraint("user_id", name="uq_employees_user_id"),
+        UniqueConstraint("id", "organization_id", name="uq_employees_id_org"),
+    )
 
     organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)
     user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))

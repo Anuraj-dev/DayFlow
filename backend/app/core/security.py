@@ -4,7 +4,7 @@ from uuid import UUID
 
 import jwt
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
 from app.core.config import get_settings
 from app.domain.roles import Role
@@ -19,7 +19,7 @@ def hash_password(plain: str) -> str:
 def verify_password(plain: str, password_hash: str) -> bool:
     try:
         return _hasher.verify(password_hash, plain)
-    except VerifyMismatchError:
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
         return False
 
 

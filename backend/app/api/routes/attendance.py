@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -80,8 +81,10 @@ async def _on_leave(db: AsyncSession, employee_id, work_date) -> bool:
     return leave_id is not None
 
 
-async def _open_session(db: AsyncSession, employee_id) -> AttendanceSession | None:
-    return await db.scalar(
+async def _open_session(
+    db: AsyncSession, employee_id, *, lock: bool = False
+) -> AttendanceSession | None:
+    query = (
         select(AttendanceSession)
         .where(
             AttendanceSession.employee_id == employee_id,
@@ -90,6 +93,9 @@ async def _open_session(db: AsyncSession, employee_id) -> AttendanceSession | No
         )
         .order_by(AttendanceSession.check_in_at.desc())
     )
+    if lock:
+        query = query.with_for_update()
+    return await db.scalar(query)
 
 
 def _require_employee(principal: CurrentPrincipal) -> None:
@@ -254,7 +260,7 @@ async def check_in(
     timezone_name = await _org_timezone(db, principal.organization_id)
     now = datetime.now(UTC)
     work_date = now.astimezone(ZoneInfo(timezone_name)).date()
-    open_row = await _open_session(db, principal.employee_id)
+    open_row = await _open_session(db, principal.employee_id, lock=True)
     try:
         can_check_in(
             open_session_exists=open_row is not None,
@@ -273,7 +279,14 @@ async def check_in(
         worked_minutes=None,
     )
     db.add(session)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An open attendance session already exists.",
+        ) from exc
     await db.refresh(session)
     return _session_out(session)
 
@@ -377,20 +390,27 @@ async def review_correction(
     row.reviewed_at = now
     row.review_comment = body.comment.strip() if body.comment else None
     if decision == CorrectionStatus.APPROVED.value:
+        check_out_at = row.proposed_check_out_at
+        if check_out_at is None:
+            check_out_at = session_row.check_out_at
         try:
-            if row.proposed_check_out_at is not None:
+            if check_out_at is not None:
                 can_check_out(
                     check_in_at=row.proposed_check_in_at,
-                    check_out_at=row.proposed_check_out_at,
+                    check_out_at=check_out_at,
                 )
+            elif session_row.status != AttendanceStatus.OPEN.value:
+                other_open = await _open_session(db, session_row.employee_id, lock=True)
+                if other_open is not None and other_open.id != session_row.id:
+                    raise AttendanceError("An open attendance session already exists.")
         except AttendanceError as exc:
-            _raise_attendance(exc)
+            _raise_attendance(exc, conflict="open attendance session" in str(exc).lower())
         await _apply_times(
             db,
             session_row,
             organization_id=principal.organization_id,
             check_in_at=row.proposed_check_in_at,
-            check_out_at=row.proposed_check_out_at,
+            check_out_at=check_out_at,
         )
     after = _punch_snapshot(session_row)
     db.add(

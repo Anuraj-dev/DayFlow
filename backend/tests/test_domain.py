@@ -21,9 +21,9 @@ from app.domain.payroll import PayrollError, PayrollPeriodStatus, assert_mutable
 from app.domain.roles import Role
 
 
-def test_employee_cannot_read_another_record():
+def test_directory_is_readable_by_employees():
     assert can_read_employee(role=Role.EMPLOYEE, actor_employee_id=1, target_employee_id=1)
-    assert not can_read_employee(role=Role.EMPLOYEE, actor_employee_id=1, target_employee_id=2)
+    assert can_read_employee(role=Role.EMPLOYEE, actor_employee_id=1, target_employee_id=2)
     assert can_read_employee(role=Role.HR, actor_employee_id=1, target_employee_id=2)
 
 

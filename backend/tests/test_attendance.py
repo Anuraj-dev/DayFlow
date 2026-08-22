@@ -583,3 +583,54 @@ async def test_attendance_mutations_require_auth(client: AsyncClient):
     )
     assert correction.status_code == 401
     assert correction.json()["detail"] == "Not signed in."
+
+
+async def test_correction_without_checkout_keeps_existing_checkout(client: AsyncClient):
+    email, password = await _create_active_employee()
+    actor = await _sign_in(client, email, password)
+    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
+    headers = {"Authorization": f"Bearer {actor['access_token']}"}
+    employee_id = actor["user"]["employee_id"]
+    original_in = datetime(2026, 8, 21, 4, 0, tzinfo=UTC)
+    original_out = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
+    proposed_in = datetime(2026, 8, 21, 3, 45, tzinfo=UTC)
+
+    async with SessionLocal() as db:
+        session_row = AttendanceSession(
+            employee_id=employee_id,
+            work_date=date(2026, 8, 21),
+            check_in_at=original_in,
+            check_out_at=original_out,
+            source="SERVER",
+            status="PRESENT",
+            worked_minutes=480,
+        )
+        db.add(session_row)
+        await db.commit()
+        await db.refresh(session_row)
+        session_id = str(session_row.id)
+
+    created = await client.post(
+        "/api/attendance/corrections",
+        headers=headers,
+        json={
+            "attendance_session_id": session_id,
+            "proposed_check_in_at": proposed_in.isoformat(),
+            "reason": "Only the start time was wrong.",
+        },
+    )
+    assert created.status_code == 200
+    correction_id = created.json()["id"]
+
+    approved = await client.post(
+        f"/api/attendance/corrections/{correction_id}/review",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+        json={"decision": "APPROVED"},
+    )
+    assert approved.status_code == 200
+
+    listed = await client.get("/api/attendance", headers=headers)
+    row = next(item for item in listed.json()["sessions"] if item["id"] == session_id)
+    assert row["check_in_at"].startswith("2026-08-21T03:45:00")
+    assert row["check_out_at"].startswith("2026-08-21T12:00:00")
+    assert row["status"] != "OPEN"
