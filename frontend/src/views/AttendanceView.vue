@@ -21,15 +21,17 @@ import { Textarea } from '@/components/ui/textarea'
 import { api, HttpError } from '@/api/client'
 import { formatDate, formatDateTime, personLabel } from '@/lib/format'
 import { attendanceStatusLabel, exceptionKindLabel, statusTone } from '@/lib/status'
+import { useAttendanceStore } from '@/stores/attendance'
 import { useSessionStore } from '@/stores/session'
-import type { AttendanceException, AttendanceHome, AttendanceSession } from '@/types/domain'
+import type { AttendanceException, AttendanceSession } from '@/types/domain'
 
 const session = useSessionStore()
-const data = ref<AttendanceHome | null>(null)
-const error = ref('')
+const attendance = useAttendanceStore()
+const data = computed(() => attendance.home)
+const error = computed(() => attendance.error)
+const loading = computed(() => attendance.loading && !attendance.home)
 const actionError = ref('')
 const actionStatus = ref('')
-const loading = ref(true)
 
 const kindFilter = ref<'all' | 'missing_check_out' | 'correction_pending'>('all')
 const personFilter = ref('')
@@ -65,18 +67,12 @@ const selectedException = computed(() =>
 )
 
 onMounted(async () => {
-  try {
-    const home = await api<AttendanceHome>('/api/attendance')
-    data.value = home
-    if (!correctionSessionId.value) {
-      correctionSessionId.value = home.sessions[0]?.id ?? ''
-    }
-    selectedExceptionId.value = home.exceptions[0]?.id ?? ''
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Could not load attendance.'
-  } finally {
-    loading.value = false
+  await attendance.load()
+  const home = attendance.home
+  if (!correctionSessionId.value) {
+    correctionSessionId.value = home?.sessions[0]?.id ?? ''
   }
+  selectedExceptionId.value = home?.exceptions[0]?.id ?? ''
 })
 
 function sessionLabel(row: AttendanceSession): string {
@@ -100,8 +96,7 @@ async function punch(path: '/api/attendance/check-in' | '/api/attendance/check-o
   actionError.value = ''
   actionStatus.value = ''
   try {
-    await api(path, { method: 'POST' })
-    data.value = await api('/api/attendance')
+    await attendance.punch(path)
     actionStatus.value = path.endsWith('check-in') ? 'Checked in successfully.' : 'Checked out successfully.'
   } catch (err) {
     actionError.value = err instanceof HttpError ? err.detail : 'Attendance action failed.'
@@ -157,7 +152,7 @@ async function submitCorrection() {
     pendingCorrections.value = new Set([...pendingCorrections.value, correctionSessionId.value])
     correctionOpen.value = false
     correctionReason.value = ''
-    data.value = await api('/api/attendance')
+    await attendance.load()
     actionStatus.value = 'Correction request sent to HR.'
   } catch (err) {
     actionError.value = err instanceof HttpError ? err.detail : 'Could not request a correction.'
@@ -179,9 +174,8 @@ async function reviewCorrection(decision: 'APPROVED' | 'REJECTED') {
       method: 'POST',
       body: JSON.stringify({ decision, comment: reviewComment.value.trim() || null }),
     })
-    const home = await api<AttendanceHome>('/api/attendance')
-    data.value = home
-    selectedExceptionId.value = home.exceptions[0]?.id ?? ''
+    await attendance.load()
+    selectedExceptionId.value = attendance.home?.exceptions[0]?.id ?? ''
     reviewComment.value = ''
     actionStatus.value = decision === 'APPROVED' ? 'Correction approved and attendance updated.' : 'Correction rejected.'
   } catch (err) {
@@ -220,7 +214,9 @@ async function reviewCorrection(decision: 'APPROVED' | 'REJECTED') {
     <p v-if="loading">Loading attendance…</p>
     <p v-else-if="error" role="alert">{{ error }}</p>
     <div v-else>
-      <p v-if="actionError" class="feedback-error" role="alert">{{ actionError }}</p>
+      <p v-if="attendance.actionError || actionError" class="feedback-error" role="alert">
+        {{ attendance.actionError || actionError }}
+      </p>
       <p v-if="actionStatus" class="feedback-success" role="status">{{ actionStatus }}</p>
       <div v-if="!session.isHr" class="mb-4">
         <h2 class="mt-0">Today</h2>

@@ -12,9 +12,11 @@ import {
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, RouterView, useRouter } from 'vue-router'
 
+import { useAttendanceStore } from '@/stores/attendance'
 import { useSessionStore } from '@/stores/session'
 
 const session = useSessionStore()
+const attendance = useAttendanceStore()
 const router = useRouter()
 const menuOpen = ref(false)
 const mobileNavOpen = ref(false)
@@ -40,10 +42,19 @@ const profilePath = computed(() =>
 )
 
 async function signOut() {
+  attendance.reset()
   session.signOut()
   menuOpen.value = false
   mobileNavOpen.value = false
   await router.push({ name: 'sign-in' })
+}
+
+async function punch(path: '/api/attendance/check-in' | '/api/attendance/check-out') {
+  try {
+    await attendance.punch(path)
+  } catch {
+    // Store keeps the API error for the shell alert.
+  }
 }
 
 function closeMobileNav() {
@@ -74,6 +85,7 @@ function onDocumentKey(event: KeyboardEvent) {
 onMounted(() => {
   document.addEventListener('pointerdown', onDocumentPointer)
   document.addEventListener('keydown', onDocumentKey)
+  if (session.user?.employee_id) void attendance.load()
 })
 
 onUnmounted(() => {
@@ -112,9 +124,37 @@ onUnmounted(() => {
           {{ item.label }}
         </RouterLink>
       </nav>
+      <div
+        v-if="attendance.visible"
+        data-slot="shell-punch"
+        class="ml-auto flex min-w-0 max-w-[min(100%,16.5rem)] items-center gap-2 px-2 sm:ml-0 sm:max-w-none sm:px-3"
+      >
+        <span class="min-w-0 truncate text-[13px] text-white/90" role="status">{{
+          attendance.statusLabel
+        }}</span>
+        <button
+          v-if="attendance.canCheckIn"
+          type="button"
+          class="h-7 shrink-0 border border-white/40 bg-transparent px-2 text-[13px] text-white hover:bg-black/8 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-white"
+          :disabled="attendance.punching"
+          @click="punch('/api/attendance/check-in')"
+        >
+          Check in
+        </button>
+        <button
+          v-else-if="attendance.canCheckOut"
+          type="button"
+          class="h-7 shrink-0 border border-white/40 bg-transparent px-2 text-[13px] text-white hover:bg-black/8 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-white"
+          :disabled="attendance.punching"
+          @click="punch('/api/attendance/check-out')"
+        >
+          Check out
+        </button>
+      </div>
       <button
         type="button"
-        class="ml-auto flex size-[46px] items-center justify-center text-white sm:hidden"
+        class="flex size-[46px] items-center justify-center text-white sm:hidden"
+        :class="attendance.visible ? '' : 'ml-auto'"
         :aria-expanded="mobileNavOpen"
         aria-controls="mobile-product-nav"
         aria-label="Toggle navigation"
@@ -166,6 +206,33 @@ onUnmounted(() => {
       aria-label="Mobile product areas"
       class="border-b border-black/20 bg-primary text-white sm:hidden"
     >
+      <div
+        v-if="attendance.visible"
+        data-slot="shell-punch-mobile"
+        class="flex min-h-[44px] items-center justify-between gap-3 border-t border-white/10 px-4"
+      >
+        <span class="min-w-0 truncate text-[13px] text-white/90" role="status">{{
+          attendance.statusLabel
+        }}</span>
+        <button
+          v-if="attendance.canCheckIn"
+          type="button"
+          class="h-8 shrink-0 border border-white/40 bg-transparent px-2 text-[13px] text-white hover:bg-black/8 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-white"
+          :disabled="attendance.punching"
+          @click="punch('/api/attendance/check-in')"
+        >
+          Check in
+        </button>
+        <button
+          v-else-if="attendance.canCheckOut"
+          type="button"
+          class="h-8 shrink-0 border border-white/40 bg-transparent px-2 text-[13px] text-white hover:bg-black/8 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-white"
+          :disabled="attendance.punching"
+          @click="punch('/api/attendance/check-out')"
+        >
+          Check out
+        </button>
+      </div>
       <RouterLink
         v-for="item in nav"
         :key="item.to"
@@ -197,6 +264,14 @@ onUnmounted(() => {
         Log out
       </button>
     </nav>
+    <p
+      v-if="attendance.visible && (attendance.actionError || attendance.error)"
+      data-slot="shell-punch-error"
+      class="border-b border-[#DEE2E6] bg-white px-4 py-1 text-[13px] text-[#DC3545]"
+      role="alert"
+    >
+      {{ attendance.actionError || attendance.error }}
+    </p>
     <div
       data-slot="control-panel"
       class="flex min-w-0 flex-wrap items-center gap-3 border-b border-[#DEE2E6] bg-white px-4 py-2 has-[#control-actions:empty]:hidden"

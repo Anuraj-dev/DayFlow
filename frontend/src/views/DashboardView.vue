@@ -7,7 +7,7 @@ import {
   Clock3Icon,
   HeartPulseIcon,
 } from '@lucide/vue'
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
 import EmptyState from '@/components/EmptyState.vue'
@@ -26,10 +26,12 @@ import {
 } from '@/components/ui/table'
 import { api, HttpError } from '@/api/client'
 import { attendanceStatusLabel, statusTone } from '@/lib/status'
+import { useAttendanceStore } from '@/stores/attendance'
 import { useSessionStore } from '@/stores/session'
 import type { DashboardPayload, LeaveBalance } from '@/types/domain'
 
 const session = useSessionStore()
+const attendance = useAttendanceStore()
 const router = useRouter()
 const loading = ref(true)
 const error = ref('')
@@ -43,8 +45,13 @@ const hr = computed(() => (payload.value?.kind === 'HR' ? payload.value : null))
 const balances = computed<LeaveBalance[]>(() => employee.value?.leave_balances ?? [])
 const attendanceLabel = computed(() => attendanceStatusLabel(employee.value?.attendance_state))
 const attendanceTone = computed(() => statusTone(attendanceLabel.value))
-const canCheckIn = computed(() => employee.value?.attendance_state === 'not_checked_in')
-const canCheckOut = computed(() => employee.value?.attendance_state === 'checked_in')
+const canCheckIn = computed(
+  () =>
+    attendance.canCheckIn &&
+    employee.value?.attendance_state !== 'on_leave' &&
+    employee.value?.attendance_state !== 'checked_out',
+)
+const canCheckOut = computed(() => attendance.canCheckOut)
 const coverageLabel = computed(
   () => hr.value?.today_coverage || hr.value?.headline || 'Not reported',
 )
@@ -72,7 +79,7 @@ async function punch(path: '/api/attendance/check-in' | '/api/attendance/check-o
   actionError.value = ''
   actionStatus.value = ''
   try {
-    await api(path, { method: 'POST' })
+    await attendance.punch(path)
     payload.value = await api('/api/dashboard')
     actionStatus.value = path.endsWith('check-in')
       ? 'Checked in successfully.'
@@ -81,6 +88,18 @@ async function punch(path: '/api/attendance/check-in' | '/api/attendance/check-o
     actionError.value = err instanceof HttpError ? err.detail : 'Attendance action failed.'
   }
 }
+
+watch(
+  () => attendance.revision,
+  async (value, previous) => {
+    if (!value || !previous || !payload.value || payload.value.kind !== 'EMPLOYEE') return
+    try {
+      payload.value = await api('/api/dashboard')
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'Could not load dashboard.'
+    }
+  },
+)
 
 async function openPayroll() {
   await router.push({ name: 'payroll' })
