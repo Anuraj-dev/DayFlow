@@ -87,6 +87,24 @@ export function employeeStatusLabel(status: string | null | undefined): string {
   }
 }
 
+export function payrollStatusLabel(status: string | null | undefined): string {
+  switch (normalizeStatus(status)) {
+    case 'draft':
+      return 'Draft'
+    case 'finalized':
+      return 'Finalized'
+    case 'published':
+      return 'Published'
+    case 'validation_errors':
+    case 'validation_error':
+      return 'Validation errors'
+    case 'correction_needed':
+      return 'Correction needed'
+    default:
+      return status ? status.replace(/_/g, ' ') : 'Unknown'
+  }
+}
+
 export function statusTone(label: string): 'neutral' | 'confirmed' | 'review' | 'danger' {
   const value = label.toLowerCase()
   if (['active', 'approved', 'published', 'present', 'checked in', 'checked out'].includes(value)) {
@@ -102,6 +120,8 @@ export function statusTone(label: string): 'neutral' | 'confirmed' | 'review' | 
       'missing document',
       'insufficient balance',
       'overlap',
+      'validation errors',
+      'correction needed',
     ].includes(value)
   ) {
     return 'danger'
@@ -118,6 +138,7 @@ export function statusTone(label: string): 'neutral' | 'confirmed' | 'review' | 
       'half-day',
       'correction requested',
       'conflict',
+      'finalized',
     ].includes(value)
   ) {
     return 'review'

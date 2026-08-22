@@ -380,7 +380,7 @@ describe('role-aware product views', () => {
     })
     const wrapper = await mountView(PayrollView, 'EMPLOYEE')
     expect(wrapper.get('table').text()).toMatch(/2026-08-01/)
-    expect(wrapper.get('table').text()).toMatch(/PUBLISHED/)
+    expect(wrapper.get('table').text()).toMatch(/Published/)
     expect(wrapper.text()).toMatch(/USD/)
     expect(wrapper.text()).toMatch(/2400/)
   })

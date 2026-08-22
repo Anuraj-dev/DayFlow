@@ -122,18 +122,58 @@ export interface PayrollPeriod {
   ends_on: string
   pay_date: string
   status: string
+  validation_errors?: string[]
+  correction_needed?: boolean
+}
+
+export interface PayrollRecordLine {
+  code: string
+  label: string
+  amount: string
 }
 
 export interface PayrollRecord {
   id: string
   employee_id?: string
+  employee_name?: string
+  payroll_period_id?: string
+  gross_amount?: string
+  deduction_amount?: string
   net_amount: string
   currency: string
   published_at: string | null
+  lines?: PayrollRecordLine[]
+}
+
+export interface SalaryComponentAmount {
+  code: string
+  name?: string
+  kind?: string
+  amount: string
+}
+
+export interface EmployeeSalaryInputs {
+  employee_id: string
+  employee_name?: string
+  components: SalaryComponentAmount[]
+}
+
+export interface PayrollException {
+  kind: string
+  detail: string
+  employee_id?: string
+  employee_name?: string
 }
 
 export interface PayrollHome {
   role: string
   periods: PayrollPeriod[]
   records: PayrollRecord[]
+  salary_inputs?: EmployeeSalaryInputs[]
+  exceptions?: PayrollException[]
+}
+
+export interface SalaryComponentPatchResponse {
+  employee_id: string
+  components: SalaryComponentAmount[]
 }
