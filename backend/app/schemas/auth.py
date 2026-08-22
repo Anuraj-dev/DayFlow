@@ -1,0 +1,39 @@
+from uuid import UUID
+
+from pydantic import BaseModel, EmailStr, Field
+
+from app.domain.roles import Role
+
+
+class SignInRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=12)
+
+
+class ActivateAccountRequest(BaseModel):
+    employee_code: str
+    email: EmailStr
+    token: str
+    password: str = Field(min_length=12)
+
+
+class ActivateAccountResponse(BaseModel):
+    status: str
+    detail: str
+
+
+class SessionUser(BaseModel):
+    id: UUID
+    email: EmailStr
+    role: Role
+    organization_id: UUID
+    employee_id: UUID | None
+    first_name: str | None
+    last_name: str | None
+    employee_code: str | None
+
+
+class SignInResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: SessionUser
