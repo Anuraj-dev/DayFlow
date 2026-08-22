@@ -23,13 +23,13 @@ export function attendanceStatusLabel(state: string | null | undefined): string 
 
 export function statusTone(label: string): 'neutral' | 'confirmed' | 'review' | 'danger' {
   const value = label.toLowerCase()
-  if (['active', 'approved', 'published', 'present', 'checked in', 'checked out'].includes(value)) {
+  if (['active', 'approved', 'published', 'present', 'checked in', 'checked out', 'staffed', 'on track', 'clear', 'queue empty'].includes(value)) {
     return 'confirmed'
   }
   if (['rejected', 'locked', 'danger', 'missing check-out'].includes(value)) {
     return 'danger'
   }
-  if (['pending', 'draft', 'invited', 'not checked in', 'review'].includes(value)) {
+  if (['pending', 'draft', 'invited', 'not checked in', 'on leave', 'review', 'due', 'needs review'].includes(value)) {
     return 'review'
   }
   return 'neutral'
