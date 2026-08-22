@@ -242,9 +242,10 @@ describe('AppShell role nav and control panel', () => {
     expect(nav.text()).toMatch(/Settings/)
   })
 
-  it('puts the page action in the control panel', async () => {
+  it('keeps employee punch actions in the navbar without duplicating them in the control panel', async () => {
     const { wrapper: view } = await mountShell('EMPLOYEE', employeeDashboard())
-    expect(panelButton(view, /Check in/i).attributes('disabled')).toBeUndefined()
+    expect(punchAction(view, /Check in/i)).toBeTruthy()
+    expect(view.get('[data-slot="control-panel"]').text()).not.toMatch(/Check in|Check out/i)
   })
 
   it('shows Check out in the 46px bar while open_session is set, with Checked in since from check_in_at', async () => {
@@ -459,9 +460,10 @@ describe('employee dashboard states', () => {
     const headingRow = view.get('.attendance-heading-row')
     expect(headingRow.get('#attendance-heading').text()).toBe('Attendance')
     expect(headingRow.get('[role="status"]').text()).toMatch(/Not checked in/)
-    const checkIn = panelButton(view, /Check in/i)
-    expect(checkIn.attributes('disabled')).toBeUndefined()
-    await checkIn.trigger('click')
+    const checkIn = punchAction(view, /Check in/i)
+    expect(checkIn).toBeTruthy()
+    expect(checkIn!.attributes('disabled')).toBeUndefined()
+    await checkIn!.trigger('click')
     await flushPromises()
     expect(
       fetchMock.mock.calls.some(
@@ -478,7 +480,7 @@ describe('employee dashboard states', () => {
     ).toMatch(/not implemented|Check-in/i)
   })
 
-  it('switches the control action to Check out after check-in', async () => {
+  it('switches the navbar action to Check out after check-in', async () => {
     const view = await mountDashboard(
       employeeDashboard({
         headline: 'You are checked in',
@@ -489,10 +491,11 @@ describe('employee dashboard states', () => {
       }),
     )
     expect(view.text()).toMatch(/Checked in/)
-    expect(panelButton(view, /Check in/i).attributes('disabled')).toBeDefined()
-    const checkOut = panelButton(view, /Check out/i)
-    expect(checkOut.attributes('disabled')).toBeUndefined()
-    await checkOut.trigger('click')
+    expect(punchAction(view, /Check in/i)).toBeUndefined()
+    const checkOut = punchAction(view, /Check out/i)
+    expect(checkOut).toBeTruthy()
+    expect(checkOut!.attributes('disabled')).toBeUndefined()
+    await checkOut!.trigger('click')
     await flushPromises()
     expect(
       fetchMock.mock.calls.some(
@@ -503,16 +506,27 @@ describe('employee dashboard states', () => {
     ).toBe(true)
   })
 
-  it('disables punches when checked out or on leave and flags an incomplete profile', async () => {
+  it('does not render page-level punch controls when checked out or on leave', async () => {
     const checkedOut = await mountDashboard(
       employeeDashboard({
         headline: 'Workday closed',
         attendance_state: 'checked_out',
       }),
+      attendanceHome({
+        sessions: [
+          {
+            id: 's-closed',
+            work_date: formatLocalIsoDate(),
+            check_in_at: '2026-08-22T03:30:00Z',
+            check_out_at: '2026-08-22T12:00:00Z',
+            status: 'PRESENT',
+          },
+        ],
+      }),
     )
     expect(checkedOut.text()).toMatch(/Checked out/)
-    expect(panelButton(checkedOut, /Check in/i).attributes('disabled')).toBeDefined()
-    expect(panelButton(checkedOut, /Check out/i).attributes('disabled')).toBeDefined()
+    expect(punchAction(checkedOut, /Check in/i)).toBeUndefined()
+    expect(punchAction(checkedOut, /Check out/i)).toBeUndefined()
     checkedOut.unmount()
 
     wrapper = null
@@ -523,7 +537,7 @@ describe('employee dashboard states', () => {
       }),
     )
     expect(onLeave.text()).toMatch(/On leave/)
-    expect(panelButton(onLeave, /Check in/i).attributes('disabled')).toBeDefined()
+    expect(onLeave.get('[data-slot="control-panel"]').text()).not.toMatch(/Check in|Check out/i)
     onLeave.unmount()
 
     wrapper = null
