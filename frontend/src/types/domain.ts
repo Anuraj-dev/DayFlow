@@ -43,6 +43,8 @@ export interface ApiError {
 export interface LeaveBalance {
   leave_type: string
   remaining_days: number
+  granted_days?: number
+  used_days?: number
 }
 
 export interface EmployeeDashboard {
@@ -99,7 +101,11 @@ export interface LeaveRequest {
   starts_on: string
   ends_on: string
   status: string
+  employee_id?: string
   employee_name?: string
+  counted_days?: number
+  reason?: string
+  review_comment?: string | null
 }
 
 export interface TimeOffHome {
