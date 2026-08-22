@@ -4,36 +4,34 @@ Hackathon MVP for a small-company HR operations app. Build against this page whe
 
 ## The short answer
 
-Build **9 route templates** for the minimum credible MVP. Design **12 hi-fi frames** because dashboard, attendance, time-off, and payroll expose different employee and HR states.
+Build **8 route templates** for the minimum credible MVP. Design **11 hi-fi frames** because dashboard, profile, attendance, time-off, and payroll expose different employee and HR states.
 
 The 9 routes:
 
 1. `/sign-in`
-2. `/activate-account`
-3. `/dashboard`
-4. `/employees`
-5. `/employees/:employeeId`
-6. `/attendance`
-7. `/time-off`
-8. `/payroll`
-9. `/settings` for HR policy configuration
+2. `/dashboard`
+3. `/employees`
+4. `/employees/:employeeId`
+5. `/attendance`
+6. `/time-off`
+7. `/payroll`
+8. `/settings` for HR policy configuration
 
-`/settings` can stay unimplemented if policy values are seeded. That leaves **8 implemented route templates** as the demo floor. Do not remove account activation, permission checks, or the role-specific states.
+`/settings` can stay read-only if policy values are seeded. There is no public registration or activation page. HR creates employee accounts and supplies initial credentials. Do not remove permission checks or the role-specific states.
 
 The 12 design frames:
 
 1. Sign in
-2. Account activation and email verification state
-3. Employee dashboard
-4. HR dashboard
-5. People directory
-6. Employee profile
+2. Employee dashboard
+3. HR dashboard
+4. People directory
+5. Employee self profile
+6. HR employee profile
 7. Employee attendance
 8. HR attendance review
 9. Employee time off
 10. HR leave approvals
-11. Employee payroll
-12. HR payroll control
+11. Employee and HR payroll states
 
 ## What the app is
 
@@ -53,7 +51,7 @@ That flow shapes navigation and the data model.
 
 ### Confirmed by the source PDF
 
-- Authentication includes sign-up, sign-in, password rules, and email verification.
+- The source includes sign-up, sign-in, password rules, and email verification.
 - Two user classes: employee and Admin/HR Officer.
 - Employees can view personal, job, salary, document, and profile-picture data.
 - Employees can edit address, phone, and profile picture. HR can edit all employee data.
@@ -70,7 +68,7 @@ Keep visible attendance status, compact profile tabs, and a single time-off work
 
 ### Problems in the source material
 
-- The PDF lets users choose Employee or HR during sign-up. That is a privilege-escalation bug. HR comes from an invitation or an existing HR administrator.
+- The PDF lets users choose Employee or HR during sign-up. Dayflow has no public sign-up. An existing HR officer creates the account and assigns its role.
 - Non-functional requirements are named but not defined. Baseline lives in `docs/DOMAIN.md`.
 - "Changes reflect immediately" is vague. The API is the source of truth; the Vue client refetches after mutations.
 - Attendance status needs text or an icon, not color alone.
@@ -81,8 +79,7 @@ Keep visible attendance status, compact profile tabs, and a single time-off work
 
 | Route | Who | Job of the page | Required states |
 |---|---|---|---|
-| `/sign-in` | Everyone | Authenticate with work email and password | default, bad credentials, locked/disabled account, forgot-password entry |
-| `/activate-account` | Invited users | Match an invite to employee ID and email, set password, verify email | invite valid, expired, already used, verification sent, verified |
+| `/sign-in` | Everyone | Authenticate with work email or generated login ID and password | default, bad credentials, locked/disabled account, forgot-password entry |
 | `/dashboard` | Employee | Today's attendance action, leave balances, next pay date, alerts, recent activity | not checked in, checked in, checked out, on leave, incomplete profile |
 | `/dashboard` | HR | Headcount, today's coverage, pending approvals, attendance exceptions | empty queue, partial data, payroll period due |
 | `/employees` | HR | Find, filter, add, activate, or open employees | loading, empty, no results, inactive employees |
@@ -106,13 +103,13 @@ One application shell with five product areas: Overview, People, Attendance, Tim
 
 ## Primary flows
 
-### Employee activation
+### Employee onboarding
 
 1. HR creates or imports an employee.
-2. Dayflow issues a single-use invite tied to organization, employee record, work email, and role.
-3. The employee enters employee ID and email, then sets a password.
-4. Dayflow verifies the email and activates the account.
-5. The employee lands on the personal dashboard.
+2. Dayflow creates a login ID and initial password tied to the employee record, organization, work email, and role.
+3. HR supplies those credentials through the approved company channel.
+4. The employee signs in with the login ID or work email and the initial password.
+5. The employee lands on the personal dashboard and can change the initial password.
 
 ### Daily attendance
 
@@ -147,7 +144,7 @@ Follow `docs/UI.md`. Odoo 19 product UI: 46px plum bar, white control panel, `#F
 
 ### Build first
 
-1. Organization seed, users, memberships, employees, and invite activation.
+1. Organization seed, users, memberships, employees, and HR-controlled account creation.
 2. Shared shell and role-aware dashboard.
 3. Employee directory and profile permissions.
 4. Attendance session and employee/HR views.
@@ -161,14 +158,14 @@ Follow `docs/UI.md`. Odoo 19 product UI: 46px plum bar, white control panel, `#F
 - Document upload. Show the tab with a deferred state.
 - Payroll calculations. Seed a finalized period; keep HR editing limited to salary components.
 - Reports and analytics.
-- Email notifications other than activation and password reset.
+- Email notifications other than password reset.
 
-Do not cut server-side authorization, organization isolation, invite-bound roles, or audit records for salary and approvals.
+Do not cut server-side authorization, organization isolation, HR-controlled roles, or audit records for salary and approvals.
 
 ## Definition of done for the prototype
 
 - Employee and HR accounts land on different dashboards.
-- An employee cannot edit another employee's data or read unpublished payroll by changing a URL. Coworker profile GET is view-only.
+- An employee cannot open another employee's private data by changing a URL.
 - Check-in and check-out create a coherent attendance record.
 - An employee can submit a valid leave request and see its status.
 - HR can approve or reject the request with an audit record.

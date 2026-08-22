@@ -52,11 +52,14 @@ function namedButton(wrapper: VueWrapper, text: string) {
   return button!
 }
 
-function shellPunchButton(wrapper: VueWrapper, text: RegExp) {
-  const shell = wrapper.get('[data-slot="shell-punch"]')
-  const button = shell.findAll('button').find((node) => text.test(node.text()))
-  expect(button, `missing shell punch action matching ${text}`).toBeTruthy()
-  return button!
+function controlPanelButton(text: RegExp) {
+  const panel = document.querySelector('[data-slot="control-panel"]')
+  expect(panel, 'missing control panel').toBeTruthy()
+  const button = Array.from(panel!.querySelectorAll('button')).find((node) =>
+    text.test(node.textContent ?? ''),
+  )
+  expect(button, `missing ${text} on the control panel`).toBeTruthy()
+  return button as HTMLButtonElement
 }
 
 function inputByLabel(wrapper: VueWrapper, labelText: string) {
@@ -125,7 +128,7 @@ describe('Employee attendance', () => {
     document.body.innerHTML = ''
   })
 
-  it('keeps punch actions in the navbar and only shows correction in the control panel', async () => {
+  it('places check-in and check-out on the control panel and POSTs check-in', async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes('/api/attendance/check-in') && init?.method === 'POST') {
@@ -166,32 +169,65 @@ describe('Employee attendance', () => {
     })
 
     const wrapper = await mountAttendance('EMPLOYEE')
-    const checkIn = shellPunchButton(wrapper, /Check in/i)
-    const controlPanel = document.querySelector('[data-slot="control-panel"]')
-    expect(controlPanel?.textContent).toMatch(/Request correction/i)
-    expect(controlPanel?.textContent).not.toMatch(/Check in|Check out/i)
+    const checkIn = controlPanelButton(/Check in/i)
+    const checkOut = controlPanelButton(/Check out/i)
+    expect(checkIn.disabled).toBe(false)
+    expect(checkOut.disabled).toBe(true)
 
-    await checkIn.trigger('click')
+    checkIn.click()
     await flushPromises()
 
     expect(
       fetchMock.mock.calls.some(
         ([url, init]) =>
-          String(url).includes('/api/attendance/check-in') && (init as RequestInit | undefined)?.method === 'POST',
+          String(url).includes('/api/attendance/check-in') &&
+          (init as RequestInit | undefined)?.method === 'POST',
       ),
     ).toBe(true)
-    expect(shellPunchButton(wrapper, /Check out/i)).toBeTruthy()
+    expect(controlPanelButton(/Check in/i).disabled).toBe(true)
+    expect(controlPanelButton(/Check out/i).disabled).toBe(false)
     expect(wrapper.text()).toMatch(/Checked in/i)
+    expect(wrapper.text()).toMatch(/Recorded days/)
+    expect(wrapper.text()).toMatch(/Attendance history/)
   })
 
-  it('lists the selected month with present, late, missing check-out, leave, half-day, and correction requested', async () => {
+  it('uses only the session whose work date is today in the Today summary', async () => {
     fetchMock.mockImplementation(() =>
       jsonResponse(
         200,
         home({
-          month: '2026-08',
-          full_day_minutes: 480,
-          summary: { days_present: 2.5, leave_days: 1, scheduled_working_days: 21 },
+          sessions: [
+            {
+              id: 'historical-first',
+              work_date: '2026-08-21',
+              check_in_at: '2026-08-21T01:00:00Z',
+              check_out_at: '2026-08-21T09:00:00Z',
+              status: 'PRESENT',
+            },
+            {
+              id: 'today-second',
+              work_date: '2026-08-22',
+              check_in_at: '2026-08-22T02:00:00Z',
+              check_out_at: '2026-08-22T10:00:00Z',
+              status: 'PRESENT',
+            },
+          ],
+        }),
+      ),
+    )
+
+    const wrapper = await mountAttendance('EMPLOYEE')
+    const today = wrapper.get('#attendance-today-title').element.closest('section')
+    expect(today?.textContent).toContain('Aug 22, 2026')
+    expect(today?.textContent).not.toContain('Aug 21, 2026')
+    expect(today?.textContent).toMatch(/Checked out/i)
+  })
+
+  it('lists the week with present, late, missing check-out, leave, half-day, and correction requested', async () => {
+    fetchMock.mockImplementation(() =>
+      jsonResponse(
+        200,
+        home({
           sessions: [
             {
               id: 's-present',
@@ -243,18 +279,13 @@ describe('Employee attendance', () => {
 
     const wrapper = await mountAttendance('EMPLOYEE')
     const table = wrapper.get('table')
-    expect(table.text()).toMatch(/Work date/)
-    expect(wrapper.text()).toMatch(/August 2026|2026-08/)
-    expect(wrapper.text()).toMatch(/Days present/)
-    expect(wrapper.text()).toMatch(/Leave days/)
-    expect(wrapper.text()).toMatch(/Scheduled working days/)
-    expect(wrapper.text()).toMatch(/Work hours/)
-    expect(wrapper.text()).toMatch(/Extra hours/)
+    expect(table.text()).toMatch(/This week|Work date/)
     expect(wrapper.text()).toMatch(/Present/)
     expect(wrapper.text()).toMatch(/Late/)
     expect(wrapper.text()).toMatch(/Missing check-out/)
     expect(wrapper.text()).toMatch(/Leave|On leave/)
     expect(wrapper.text()).toMatch(/Half-day/)
+    expect(wrapper.text()).toMatch(/Correction requested/)
 
     const tones = wrapper.findAll('[data-tone]').map((node) => ({
       text: node.text().trim(),
@@ -262,10 +293,14 @@ describe('Employee attendance', () => {
     }))
     expect(tones.some((row) => row.text === 'Present' && row.tone === 'confirmed')).toBe(true)
     expect(tones.some((row) => row.text === 'Late' && row.tone === 'review')).toBe(true)
-    expect(tones.some((row) => row.text === 'Missing check-out' && row.tone === 'danger')).toBe(true)
+    expect(tones.some((row) => row.text === 'Missing check-out' && row.tone === 'danger')).toBe(
+      true,
+    )
     expect(tones.some((row) => /leave/i.test(row.text) && row.tone)).toBe(true)
     expect(tones.some((row) => row.text === 'Half-day' && row.tone === 'review')).toBe(true)
-    expect(tones.some((row) => row.text === 'Correction requested' && row.tone === 'review')).toBe(true)
+    expect(tones.some((row) => row.text === 'Correction requested' && row.tone === 'review')).toBe(
+      true,
+    )
   })
 
   it('keeps request-correction wired when POST /api/attendance/corrections returns 501', async () => {
@@ -300,41 +335,11 @@ describe('Employee attendance', () => {
     expect(
       fetchMock.mock.calls.some(
         ([url, init]) =>
-          String(url).includes('/api/attendance/corrections') && (init as RequestInit | undefined)?.method === 'POST',
+          String(url).includes('/api/attendance/corrections') &&
+          (init as RequestInit | undefined)?.method === 'POST',
       ),
     ).toBe(true)
     expect(wrapper.get('[role="alert"]').text()).toMatch(/not implemented|correction/i)
-  })
-
-  it('requests another month from the month navigator', async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input)
-      const month = url.includes('month=2026-07') ? '2026-07' : '2026-08'
-      return jsonResponse(
-        200,
-        home({
-          month,
-          summary: { days_present: month === '2026-07' ? 18 : 3.5, leave_days: 1, scheduled_working_days: 22 },
-          days: [
-            {
-              work_date: `${month}-03`,
-              check_in_at: `${month}-03T03:30:00Z`,
-              check_out_at: `${month}-03T12:30:00Z`,
-              worked_minutes: 540,
-              extra_minutes: 60,
-              status: 'PRESENT',
-            },
-          ],
-        }),
-      )
-    })
-
-    const wrapper = await mountAttendance('EMPLOYEE')
-    expect(wrapper.text()).toMatch(/August 2026|2026-08/)
-    await inputByLabel(wrapper, 'Month').setValue('2026-07')
-    await flushPromises()
-    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('month=2026-07'))).toBe(true)
-    expect(wrapper.text()).toMatch(/July 2026|2026-07/)
   })
 })
 
@@ -400,47 +405,6 @@ describe('HR attendance review', () => {
     expect(wrapper.get('table').text()).toMatch(/Nia Shah/)
     expect(wrapper.get('table').text()).not.toMatch(/Rohan Iyer/)
     expect(wrapper.text()).not.toMatch(/This week/)
-    expect(wrapper.text()).toMatch(/Today/)
-  })
-
-  it('renders today roster plus the existing exception queue', async () => {
-    fetchMock.mockImplementation(() =>
-      jsonResponse(
-        200,
-        home({
-          role: 'HR',
-          today: '2026-08-22',
-          roster: [
-            {
-              employee_id: SELF_ID,
-              employee_name: 'Rohan Iyer',
-              check_in_at: '2026-08-22T03:30:00Z',
-              check_out_at: '2026-08-22T12:30:00Z',
-              worked_minutes: 540,
-              extra_minutes: 60,
-              status: 'PRESENT',
-            },
-          ],
-          exceptions: [
-            {
-              id: 'ex-open',
-              employee_id: SELF_ID,
-              employee_name: 'Rohan Iyer',
-              kind: 'missing_check_out',
-              status: 'OPEN',
-            },
-          ],
-        }),
-      ),
-    )
-
-    const wrapper = await mountAttendance('HR')
-    const tables = wrapper.findAll('table')
-    expect(tables.length).toBeGreaterThan(0)
-    expect(tables[0]?.text()).toMatch(/Rohan Iyer/)
-    expect(tables[0]?.text()).toMatch(/Present/)
-    expect(wrapper.text()).toMatch(/Today/)
-    expect(wrapper.text()).toMatch(/Missing check-out/)
   })
 
   it('shows correction evidence and sends an HR approval', async () => {

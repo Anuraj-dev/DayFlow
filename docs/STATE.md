@@ -15,11 +15,11 @@ PostgreSQL schema are implemented together and run with Docker Compose.
 ### Identity and access
 
 - Seeded HR and employee accounts
-- Email/password sign-in and `/me`
+- Email/password sign-in using work email or employee code, plus `/me`
 - Invite-bound employee activation
-- Console email adapter for activation and password-reset requests
+- Non-disclosing forgot-password response with the console email adapter
 - Password change for signed-in users
-- Role-aware navigation and dashboards
+- Role-aware navigation and separate employee/HR dashboards
 - Organization-scoped server authorization
 
 ### People
@@ -62,6 +62,7 @@ PostgreSQL schema are implemented together and run with Docker Compose.
 ### Frontend and delivery
 
 - Odoo 19-style product shell with responsive employee views
+- Desktop navigation, mobile navigation, account menu, route actions, filters, tables, and responsive record lists
 - HR-only People and Settings navigation
 - Loading, empty, validation, permission, and error states on core views
 - Frontend and backend CI workflows
@@ -69,7 +70,7 @@ PostgreSQL schema are implemented together and run with Docker Compose.
 
 ## Deferred
 
-- Custom Settings UI; seeded work policies are used
+- Custom Settings management; seeded work policies are used
 - Document and profile-picture upload
 - Downloadable payslip files; payroll breakdowns are available in the UI
 - Full SMTP delivery and a complete password-reset link flow
@@ -105,3 +106,8 @@ database. CI provides an isolated PostgreSQL service for every run.
 - API: `localhost:8000`
 - PostgreSQL host port: `localhost:5433`
 - Stop only this project with `docker compose down`
+
+## Delivery history
+
+- The shared shell and implemented employee/HR routes were aligned to the selected Odoo-style references.
+- Each finished feature slice uses a branch, pull request, local proof, and green CI before squash-merging to `main`.

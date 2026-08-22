@@ -70,8 +70,6 @@ function record(overrides: Partial<PayrollRecord> = {}): PayrollRecord {
     net_amount: '51200.00',
     currency: 'INR',
     published_at: '2026-09-02T00:00:00Z',
-    scheduled_days: '22.00',
-    payable_days: '20.00',
     lines: [
       { code: 'BASIC', label: 'Basic', amount: '40000.00' },
       { code: 'HRA', label: 'House rent allowance', amount: '16000.00' },
@@ -85,27 +83,10 @@ function salaryInputs(overrides: Partial<EmployeeSalaryInputs> = {}): EmployeeSa
   return {
     employee_id: SELF_ID,
     employee_name: 'Rohan Iyer',
-    monthly_wage: '50000.00',
-    net_amount: '46800.00',
     components: [
-      {
-        code: 'BASIC',
-        name: 'Basic',
-        kind: 'EARNING',
-        calculation_type: 'PERCENT_OF_WAGE',
-        rate: '50.00',
-        amount: '25000.00',
-        editable: true,
-      },
-      {
-        code: 'HRA',
-        name: 'House rent allowance',
-        kind: 'EARNING',
-        calculation_type: 'PERCENT_OF_BASIC',
-        rate: '50.00',
-        amount: '12500.00',
-        editable: true,
-      },
+      { code: 'BASIC', name: 'Basic', kind: 'EARNING', amount: '40000.00' },
+      { code: 'HRA', name: 'House rent allowance', kind: 'EARNING', amount: '16000.00' },
+      { code: 'PF', name: 'Provident fund', kind: 'DEDUCTION', amount: '4800.00' },
     ],
     ...overrides,
   }
@@ -146,6 +127,14 @@ function namedButton(wrapper: VueWrapper, text: string) {
   return button!
 }
 
+function inputByLabel(wrapper: VueWrapper, labelText: string) {
+  const label = wrapper.findAll('label').find((node) => node.text().includes(labelText))
+  expect(label, `missing label "${labelText}"`).toBeTruthy()
+  const control = label!.find('input, textarea, select')
+  expect(control.exists(), `missing field for "${labelText}"`).toBe(true)
+  return control
+}
+
 async function mountPayroll(role: Role, path = '/payroll') {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -159,8 +148,18 @@ async function mountPayroll(role: Role, path = '/payroll') {
         component: AppShell,
         children: [
           { path: 'dashboard', name: 'dashboard', component: stub, meta: { title: 'Overview' } },
-          { path: 'employees', name: 'employees', component: stub, meta: { title: 'People', hrOnly: true } },
-          { path: 'attendance', name: 'attendance', component: stub, meta: { title: 'Attendance' } },
+          {
+            path: 'employees',
+            name: 'employees',
+            component: stub,
+            meta: { title: 'People', hrOnly: true },
+          },
+          {
+            path: 'attendance',
+            name: 'attendance',
+            component: stub,
+            meta: { title: 'Attendance' },
+          },
           { path: 'time-off', name: 'time-off', component: stub, meta: { title: 'Time off' } },
           { path: 'payroll', name: 'payroll', component: PayrollView, meta: { title: 'Payroll' } },
           {
@@ -213,13 +212,12 @@ describe('Employee payroll', () => {
     const { wrapper } = await mountPayroll('EMPLOYEE')
     expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/payroll')).toBe(true)
     expect(wrapper.text()).toMatch(/Current period/)
+    expect(wrapper.text()).toMatch(/Pay components/)
     expect(wrapper.text()).toMatch(/Aug 1, 2026/)
     expect(wrapper.text()).toMatch(/Aug 31, 2026/)
     expect(wrapper.text()).toMatch(/Sep 5, 2026/)
     expect(wrapper.text()).toMatch(/Published/)
     expect(wrapper.text()).toMatch(/₹51,200\.00/)
-    expect(wrapper.text()).toMatch(/Payable days/)
-    expect(wrapper.text()).toMatch(/20\.00/)
     expect(wrapper.text()).toMatch(/Basic/)
     expect(namedButton(wrapper, 'Download payslip').exists()).toBe(true)
     expect(wrapper.text()).not.toMatch(/\bFinalize\b/)
@@ -319,7 +317,9 @@ describe('Employee payroll', () => {
     await namedButton(wrapper, 'Download payslip').trigger('click')
     await flushPromises()
     expect(
-      fetchMock.mock.calls.some(([url]) => String(url) === `/api/payroll/records/rec-current/payslip`),
+      fetchMock.mock.calls.some(
+        ([url]) => String(url) === `/api/payroll/records/rec-current/payslip`,
+      ),
     ).toBe(true)
     expect(wrapper.get('[role="alert"]').text()).toMatch(/not implemented|Payslip/i)
   })
@@ -361,18 +361,71 @@ describe('HR payroll control', () => {
     document.body.innerHTML = ''
   })
 
-  it('lets HR finalize a draft period and points salary edits to the employee Salary tab', async () => {
+  it('lets HR edit salary only while the period is draft', async () => {
     const { wrapper } = await mountPayroll('HR')
     expect(wrapper.text()).toMatch(/Payroll control/)
     expect(wrapper.text()).toMatch(/Draft/)
     expect(wrapper.text()).toMatch(/Rohan Iyer/)
-    expect(wrapper.text()).toMatch(/Salary tab/)
-    expect(wrapper.text()).not.toMatch(/Save salary/)
+    expect(inputByLabel(wrapper, 'BASIC').attributes('disabled')).toBeUndefined()
     expect(namedButton(wrapper, 'Finalize').attributes('disabled')).toBeUndefined()
     expect(wrapper.text()).not.toMatch(/Publish payslips/)
+    expect(namedButton(wrapper, 'Save salary').attributes('disabled')).toBeUndefined()
+  })
+
+  it('PATCHes /api/payroll/salary-components from the draft salary sheet', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/payroll/salary-components' && init?.method === 'PATCH') {
+        const body = JSON.parse(String(init.body)) as {
+          employee_id: string
+          period_id: string
+          components: { code: string; amount: string }[]
+        }
+        expect(body.employee_id).toBe(SELF_ID)
+        expect(body.period_id).toBe(DRAFT_PERIOD)
+        expect(body.components).toEqual(
+          expect.arrayContaining([{ code: 'BASIC', amount: '42000.00' }]),
+        )
+        return jsonResponse(200, {
+          employee_id: SELF_ID,
+          components: [
+            { code: 'BASIC', name: 'Basic', kind: 'EARNING', amount: '42000.00' },
+            { code: 'HRA', name: 'House rent allowance', kind: 'EARNING', amount: '16000.00' },
+            { code: 'PF', name: 'Provident fund', kind: 'DEDUCTION', amount: '4800.00' },
+          ],
+        })
+      }
+      if (url.includes('/api/employees')) return jsonResponse(200, people())
+      return jsonResponse(
+        200,
+        home({
+          role: 'HR',
+          periods: [
+            period({
+              id: DRAFT_PERIOD,
+              starts_on: '2026-09-01',
+              ends_on: '2026-09-30',
+              pay_date: '2026-10-05',
+              status: 'DRAFT',
+            }),
+          ],
+          records: [],
+          salary_inputs: [salaryInputs()],
+        }),
+      )
+    })
+
+    const { wrapper } = await mountPayroll('HR')
+    await inputByLabel(wrapper, 'BASIC').setValue('42000.00')
+    await namedButton(wrapper, 'Save salary').trigger('click')
+    await flushPromises()
     expect(
-      fetchMock.mock.calls.some(([url, init]) => String(url) === '/api/payroll/salary-components' && init),
-    ).toBe(false)
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url) === '/api/payroll/salary-components' &&
+          (init as RequestInit | undefined)?.method === 'PATCH',
+      ),
+    ).toBe(true)
   })
 
   it('shows validation errors and keeps finalize wired after a 409', async () => {
@@ -393,7 +446,10 @@ describe('HR payroll control', () => {
               ends_on: '2026-09-30',
               pay_date: '2026-10-05',
               status: 'DRAFT',
-              validation_errors: ['Missing salary data for Rohan Iyer.', 'Net pay cannot be negative.'],
+              validation_errors: [
+                'Missing salary data for Rohan Iyer.',
+                'Net pay cannot be negative.',
+              ],
             }),
           ],
           records: [],
@@ -433,7 +489,9 @@ describe('HR payroll control', () => {
               status: 'FINALIZED',
             }),
           ],
-          records: [record({ payroll_period_id: DRAFT_PERIOD, published_at: null, net_amount: '52200.00' })],
+          records: [
+            record({ payroll_period_id: DRAFT_PERIOD, published_at: null, net_amount: '52200.00' }),
+          ],
           salary_inputs: [salaryInputs()],
         }),
       )
@@ -442,7 +500,8 @@ describe('HR payroll control', () => {
     const { wrapper } = await mountPayroll('HR')
     expect(wrapper.text()).toMatch(/Finalized/)
     expect(wrapper.text()).toMatch(/₹52,200\.00/)
-    expect(wrapper.text()).not.toMatch(/Save salary/)
+    expect(inputByLabel(wrapper, 'BASIC').attributes('disabled')).toBeDefined()
+    expect(namedButton(wrapper, 'Save salary').attributes('disabled')).toBeDefined()
     expect(wrapper.text()).not.toMatch(/Finalize period/)
     expect(namedButton(wrapper, 'Publish').attributes('disabled')).toBeUndefined()
   })
@@ -463,7 +522,8 @@ describe('HR payroll control', () => {
       if (url.includes('/api/employees')) return jsonResponse(200, people())
       const published = fetchMock.mock.calls.some(
         ([called, calledInit]) =>
-          String(called).includes('/publish') && (calledInit as RequestInit | undefined)?.method === 'POST',
+          String(called).includes('/publish') &&
+          (calledInit as RequestInit | undefined)?.method === 'POST',
       )
       return jsonResponse(
         200,
@@ -534,7 +594,7 @@ describe('HR payroll control', () => {
     const { wrapper } = await mountPayroll('HR')
     expect(wrapper.text()).toMatch(/Correction needed/)
     expect(wrapper.text()).toMatch(/adjustment period/i)
-    expect(wrapper.text()).toMatch(/Salary tab/)
+    expect(inputByLabel(wrapper, 'BASIC').attributes('disabled')).toBeDefined()
   })
 })
 
@@ -567,6 +627,7 @@ describe('Settings deferred policy', () => {
     const { wrapper } = await mountPayroll('HR', '/settings')
     expect(wrapper.text()).toMatch(/Settings/)
     expect(wrapper.text()).toMatch(/Attendance source/)
+    expect(wrapper.text()).toMatch(/Organization/)
     expect(wrapper.text()).toMatch(/read-only/i)
     expect(wrapper.get('nav[aria-label="Product areas"]').text()).toMatch(/Settings/)
   })

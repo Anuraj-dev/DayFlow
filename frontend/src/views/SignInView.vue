@@ -1,45 +1,89 @@
 <script setup lang="ts">
-import { BanknoteIcon, Clock3Icon, EyeIcon, EyeOffIcon, PlaneIcon } from '@lucide/vue'
-import { ref } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import {
+  BanknoteIcon,
+  CalendarDaysIcon,
+  Clock3Icon,
+  EyeIcon,
+  EyeOffIcon,
+  LoaderCircleIcon,
+} from '@lucide/vue'
+import { computed, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
+import { api, HttpError } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { api, HttpError } from '@/api/client'
-import AuthFrame from '@/layouts/AuthFrame.vue'
 import { useSessionStore } from '@/stores/session'
 
-const mode = ref<'sign-in' | 'forgot'>('sign-in')
-const email = ref('')
+const session = useSessionStore()
+const router = useRouter()
+const route = useRoute()
+const resetToken = computed(() =>
+  typeof route.query.reset === 'string' ? route.query.reset.trim() : '',
+)
+const mode = ref<'sign-in' | 'forgot' | 'reset'>(resetToken.value ? 'reset' : 'sign-in')
+const identifier = ref('')
 const password = ref('')
+const passwordConfirmation = ref('')
 const error = ref('')
 const errorTitle = ref('')
 const status = ref('')
 const submitting = ref(false)
 const passwordVisible = ref(false)
-const session = useSessionStore()
-const router = useRouter()
-const route = useRoute()
+const isForgotMode = computed(() => mode.value === 'forgot')
+const isResetMode = computed(() => mode.value === 'reset')
+const heading = computed(() => {
+  if (isResetMode.value) return 'Choose a new password'
+  if (isForgotMode.value) return 'Reset your password'
+  return 'Sign in to Dayflow'
+})
+const description = computed(() => {
+  if (isResetMode.value) return 'Set a new password for your Dayflow account.'
+  if (isForgotMode.value) return 'Enter your work email or login ID for reset instructions.'
+  return 'Use your work email or the login ID issued by HR.'
+})
 
-async function onSignIn() {
+function clearFeedback() {
   error.value = ''
   errorTitle.value = ''
+  status.value = ''
+}
+
+function showForgotPassword() {
+  clearFeedback()
+  password.value = ''
+  passwordVisible.value = false
+  mode.value = 'forgot'
+}
+
+function showSignIn() {
+  clearFeedback()
+  password.value = ''
+  passwordConfirmation.value = ''
+  passwordVisible.value = false
+  mode.value = 'sign-in'
+  if (resetToken.value) void router.replace({ name: 'sign-in' })
+}
+
+async function onSignIn() {
+  clearFeedback()
   submitting.value = true
   try {
-    await session.signIn(email.value, password.value)
+    // The API still names this field `email`; it also accepts the generated login ID.
+    await session.signIn(identifier.value.trim(), password.value)
     const next = typeof route.query.next === 'string' ? route.query.next : '/dashboard'
     await router.push(next)
   } catch (err) {
     if (err instanceof HttpError && err.status === 403) {
-      errorTitle.value = 'Account locked'
+      errorTitle.value = 'Account unavailable'
       error.value = err.detail
     } else if (err instanceof HttpError) {
       errorTitle.value = 'Sign-in failed'
       error.value = err.detail
     } else {
       errorTitle.value = 'Sign-in failed'
-      error.value = 'Could not sign in.'
+      error.value = 'Dayflow could not sign you in. Check your connection and try again.'
     }
   } finally {
     submitting.value = false
@@ -47,106 +91,503 @@ async function onSignIn() {
 }
 
 async function onForgot() {
-  error.value = ''
-  errorTitle.value = ''
+  clearFeedback()
   submitting.value = true
   try {
     const payload = await api<{ detail: string }>('/api/auth/forgot-password', {
       method: 'POST',
-      body: JSON.stringify({ email: email.value }),
+      body: JSON.stringify({ email: identifier.value.trim() }),
     })
     status.value = payload.detail
     mode.value = 'sign-in'
   } catch (err) {
     errorTitle.value = 'Reset failed'
-    error.value = err instanceof HttpError ? err.detail : 'Could not send a reset link.'
+    error.value =
+      err instanceof HttpError
+        ? err.detail
+        : 'Dayflow could not send a reset link. Check your connection and try again.'
   } finally {
     submitting.value = false
   }
 }
+
+async function onResetPassword() {
+  clearFeedback()
+  if (!resetToken.value) {
+    errorTitle.value = 'Reset link unavailable'
+    error.value = 'Request a new reset link and open it from your email.'
+    return
+  }
+  if (password.value !== passwordConfirmation.value) {
+    errorTitle.value = 'Passwords do not match'
+    error.value = 'Enter the same password in both fields.'
+    return
+  }
+
+  submitting.value = true
+  try {
+    const payload = await api<{ detail: string }>('/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token: resetToken.value, password: password.value }),
+    })
+    password.value = ''
+    passwordConfirmation.value = ''
+    passwordVisible.value = false
+    mode.value = 'sign-in'
+    await router.replace({ name: 'sign-in' })
+    status.value = payload.detail
+  } catch (err) {
+    errorTitle.value = 'Password reset failed'
+    error.value =
+      err instanceof HttpError
+        ? err.detail
+        : 'Dayflow could not reset your password. Check your connection and try again.'
+  } finally {
+    submitting.value = false
+  }
+}
+
+function onSubmit() {
+  if (isResetMode.value) return onResetPassword()
+  if (isForgotMode.value) return onForgot()
+  return onSignIn()
+}
+
+watch(resetToken, (token) => {
+  if (token) {
+    clearFeedback()
+    password.value = ''
+    passwordConfirmation.value = ''
+    mode.value = 'reset'
+  } else if (mode.value === 'reset') {
+    mode.value = 'sign-in'
+  }
+})
 </script>
 
 <template>
-  <AuthFrame>
-    <template #rail>
-      <p class="m-0 text-[21px] font-bold tracking-tight text-[#212529]">Dayflow</p>
-      <p class="mt-2 mb-6 text-[14px] leading-[1.5] text-[#495057]">
-        Attendance, leave, and payroll in one daily loop.
-      </p>
-      <ul class="m-0 flex list-none flex-col gap-5 p-0">
-        <li class="flex gap-3">
-          <Clock3Icon class="mt-0.5 size-5 shrink-0 text-[#714B67]" :stroke-width="1.75" aria-hidden="true" />
-          <div class="min-w-0">
-            <p class="m-0 font-medium text-[#212529]">Attendance</p>
-            <p class="m-0 text-[#495057]">Daily check-in and check-out with server time.</p>
-          </div>
-        </li>
-        <li class="flex gap-3">
-          <PlaneIcon class="mt-0.5 size-5 shrink-0 text-[#714B67]" :stroke-width="1.75" aria-hidden="true" />
-          <div class="min-w-0">
-            <p class="m-0 font-medium text-[#212529]">Time off</p>
-            <p class="m-0 text-[#495057]">Request leave and track approval status.</p>
-          </div>
-        </li>
-        <li class="flex gap-3">
-          <BanknoteIcon class="mt-0.5 size-5 shrink-0 text-[#714B67]" :stroke-width="1.75" aria-hidden="true" />
-          <div class="min-w-0">
-            <p class="m-0 font-medium text-[#212529]">Payroll</p>
-            <p class="m-0 text-[#495057]">Read published payslips when HR posts pay.</p>
-          </div>
-        </li>
-      </ul>
-    </template>
+  <main class="auth-page">
+    <header class="auth-bar">
+      <span class="auth-brand">Dayflow</span>
+    </header>
 
-    <h1 class="mt-0 mb-4 text-[21px] font-bold leading-[1.5]">
-      {{ mode === 'forgot' ? 'Reset your password' : 'Sign in with your work email' }}
-    </h1>
-    <p v-if="status" class="mb-3 text-[14px] text-[#212529]" role="status">{{ status }}</p>
-    <Alert v-if="error" variant="destructive" class="mb-3">
-      <AlertTitle>{{ errorTitle }}</AlertTitle>
-      <AlertDescription>{{ error }}</AlertDescription>
-    </Alert>
-    <form class="grid gap-3" @submit.prevent="mode === 'forgot' ? onForgot() : onSignIn()">
-      <label class="grid gap-1 text-sm font-medium">
-        Work email
-        <Input v-model="email" type="email" autocomplete="username" required />
-      </label>
-      <div v-if="mode === 'sign-in'" class="grid gap-1 text-sm font-medium">
-        <label for="sign-in-password">Password</label>
-        <span class="flex items-center gap-2">
-          <Input
-            id="sign-in-password"
-            v-model="password"
-            :type="passwordVisible ? 'text' : 'password'"
-            autocomplete="current-password"
-            required
-            minlength="12"
-          />
-          <Button
-            type="button"
-            variant="outline"
-            :aria-label="passwordVisible ? 'Hide password' : 'Show password'"
-            @click="passwordVisible = !passwordVisible"
-          >
-            <EyeOffIcon v-if="passwordVisible" class="size-4" aria-hidden="true" />
-            <EyeIcon v-else class="size-4" aria-hidden="true" />
-            {{ passwordVisible ? 'Hide' : 'Show' }}
-          </Button>
-        </span>
-      </div>
-      <Button v-if="mode === 'sign-in'" type="submit" :disabled="submitting">
-        {{ submitting ? 'Signing in…' : 'Sign in' }}
-      </Button>
-      <Button v-else type="submit" :disabled="submitting">Send reset link</Button>
-    </form>
-    <div class="mt-4 flex flex-wrap gap-3 text-sm">
-      <Button v-if="mode === 'sign-in'" type="button" variant="outline" @click="mode = 'forgot'">
-        Forgot password
-      </Button>
-      <Button v-else type="button" variant="ghost" @click="mode = 'sign-in'">Back to sign in</Button>
-      <RouterLink class="self-center text-[#017E84] underline" to="/activate-account">
-        Activate account
-      </RouterLink>
+    <div class="auth-stage">
+      <section class="auth-sheet" aria-labelledby="auth-title">
+        <aside class="auth-context" aria-label="Dayflow features">
+          <div>
+            <h2>Dayflow</h2>
+            <p>HR operations for your workday.</p>
+          </div>
+
+          <ul class="feature-list">
+            <li>
+              <Clock3Icon aria-hidden="true" />
+              <span>
+                <strong>Attendance</strong>
+                <small>Record workdays and review attendance.</small>
+              </span>
+            </li>
+            <li>
+              <CalendarDaysIcon aria-hidden="true" />
+              <span>
+                <strong>Time off</strong>
+                <small>Request leave and follow each decision.</small>
+              </span>
+            </li>
+            <li>
+              <BanknoteIcon aria-hidden="true" />
+              <span>
+                <strong>Payroll</strong>
+                <small>View pay periods and published payslips.</small>
+              </span>
+            </li>
+          </ul>
+        </aside>
+
+        <div class="auth-form-pane">
+          <div class="auth-form-wrap">
+            <div class="auth-heading">
+              <h1 id="auth-title">{{ heading }}</h1>
+              <p>{{ description }}</p>
+            </div>
+
+            <p v-if="status" class="auth-status" role="status" aria-live="polite">
+              {{ status }}
+            </p>
+
+            <Alert v-if="error" variant="destructive" class="auth-alert">
+              <AlertTitle>{{ errorTitle }}</AlertTitle>
+              <AlertDescription>{{ error }}</AlertDescription>
+            </Alert>
+
+            <form class="auth-form" @submit.prevent="onSubmit">
+              <template v-if="!isResetMode">
+                <label class="field-label" for="sign-in-identifier"> Work email or login ID </label>
+                <Input
+                  id="sign-in-identifier"
+                  v-model="identifier"
+                  type="text"
+                  autocomplete="username"
+                  placeholder="name@company.com or EMP-1001"
+                  :disabled="submitting"
+                  :aria-invalid="Boolean(error)"
+                  required
+                  autofocus
+                  class="auth-input"
+                />
+              </template>
+
+              <template v-if="!isForgotMode">
+                <label class="field-label password-label" for="sign-in-password">
+                  {{ isResetMode ? 'New password' : 'Password' }}
+                </label>
+                <div class="password-field">
+                  <Input
+                    id="sign-in-password"
+                    v-model="password"
+                    :type="passwordVisible ? 'text' : 'password'"
+                    :autocomplete="isResetMode ? 'new-password' : 'current-password'"
+                    :disabled="submitting"
+                    :aria-invalid="Boolean(error)"
+                    required
+                    minlength="12"
+                    :autofocus="isResetMode"
+                    class="auth-input password-input"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    class="password-toggle"
+                    :aria-label="passwordVisible ? 'Hide password' : 'Show password'"
+                    :disabled="submitting"
+                    @click="passwordVisible = !passwordVisible"
+                  >
+                    <EyeOffIcon v-if="passwordVisible" aria-hidden="true" />
+                    <EyeIcon v-else aria-hidden="true" />
+                  </Button>
+                </div>
+              </template>
+
+              <template v-if="isResetMode">
+                <label class="field-label password-label" for="reset-password-confirmation">
+                  Confirm new password
+                </label>
+                <Input
+                  id="reset-password-confirmation"
+                  v-model="passwordConfirmation"
+                  :type="passwordVisible ? 'text' : 'password'"
+                  autocomplete="new-password"
+                  :disabled="submitting"
+                  :aria-invalid="Boolean(error)"
+                  required
+                  minlength="12"
+                  class="auth-input"
+                />
+                <p class="password-help">Use at least 12 characters.</p>
+              </template>
+
+              <Button class="submit-button" type="submit" :disabled="submitting">
+                <LoaderCircleIcon v-if="submitting" class="loading-icon" aria-hidden="true" />
+                {{
+                  submitting
+                    ? isResetMode
+                      ? 'Updating password…'
+                      : isForgotMode
+                        ? 'Sending reset link…'
+                        : 'Signing in…'
+                    : isResetMode
+                      ? 'Set new password'
+                      : isForgotMode
+                        ? 'Send reset link'
+                        : 'Sign in'
+                }}
+              </Button>
+            </form>
+
+            <Button
+              v-if="!isForgotMode && !isResetMode"
+              type="button"
+              variant="outline"
+              class="secondary-action"
+              :disabled="submitting"
+              @click="showForgotPassword"
+            >
+              Forgot password
+            </Button>
+            <Button
+              v-else
+              type="button"
+              variant="ghost"
+              class="secondary-action"
+              :disabled="submitting"
+              @click="showSignIn"
+            >
+              Back to sign in
+            </Button>
+
+            <p class="access-help">Need access? Contact your HR team for a Dayflow login.</p>
+          </div>
+        </div>
+      </section>
     </div>
-  </AuthFrame>
+  </main>
 </template>
+
+<style scoped>
+.auth-page {
+  min-height: 100vh;
+  background: #f8f9fa;
+}
+
+.auth-bar {
+  display: flex;
+  height: 46px;
+  align-items: center;
+  border-bottom: 1px solid rgb(0 0 0 / 20%);
+  background: #714b67;
+  padding: 0 24px;
+  color: #fff;
+}
+
+.auth-brand {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.auth-stage {
+  display: grid;
+  min-height: calc(100vh - 46px);
+  place-items: center;
+  padding: 48px 24px;
+}
+
+.auth-sheet {
+  display: grid;
+  width: min(100%, 1120px);
+  grid-template-columns: minmax(300px, 0.82fr) minmax(420px, 1.18fr);
+  overflow: hidden;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.auth-context,
+.auth-form-pane {
+  padding: clamp(40px, 5vw, 72px);
+}
+
+.auth-context {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border-right: 1px solid #dee2e6;
+  background: #fbfbfc;
+}
+
+.auth-context h2 {
+  margin: 0 0 4px;
+  font-size: 28px;
+  letter-spacing: -0.02em;
+}
+
+.auth-context p,
+.auth-heading p {
+  margin: 0;
+  color: #495057;
+  font-size: 15px;
+}
+
+.feature-list {
+  display: grid;
+  gap: 28px;
+  margin: 56px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.feature-list li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+}
+
+.feature-list svg {
+  width: 24px;
+  height: 24px;
+  color: #714b67;
+  stroke-width: 1.7;
+}
+
+.feature-list span {
+  display: grid;
+  gap: 3px;
+}
+
+.feature-list strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.feature-list small {
+  color: #495057;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.auth-form-pane {
+  display: flex;
+  align-items: center;
+}
+
+.auth-form-wrap {
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.auth-heading {
+  margin-bottom: 28px;
+}
+
+.auth-heading h1 {
+  margin: 0 0 6px;
+  font-size: clamp(26px, 3vw, 32px);
+  line-height: 1.25;
+  letter-spacing: -0.025em;
+}
+
+.auth-form {
+  display: grid;
+}
+
+.field-label {
+  margin-bottom: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.password-label {
+  margin-top: 18px;
+}
+
+.auth-input {
+  height: 44px;
+  border-radius: 4px;
+  padding-inline: 12px;
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-input {
+  padding-right: 48px;
+}
+
+.password-help {
+  margin: 6px 0 0;
+  color: #495057;
+  font-size: 13px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 42px;
+  height: 42px;
+  border-radius: 3px;
+  color: #495057;
+}
+
+.submit-button,
+.secondary-action {
+  width: 100%;
+  height: 44px;
+  margin-top: 22px;
+  border-radius: 4px;
+}
+
+.secondary-action {
+  margin-top: 10px;
+}
+
+.auth-alert,
+.auth-status {
+  margin: 0 0 20px;
+}
+
+.auth-status {
+  border: 1px solid #7fbe8f;
+  border-radius: 4px;
+  background: #e8f6ec;
+  padding: 10px 12px;
+  color: #146c2e;
+}
+
+.access-help {
+  margin: 24px 0 0;
+  color: #495057;
+  font-size: 13px;
+  text-align: center;
+}
+
+.loading-icon {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 760px) {
+  .auth-bar {
+    padding-inline: 16px;
+  }
+
+  .auth-stage {
+    display: block;
+    padding: 20px 12px;
+  }
+
+  .auth-sheet {
+    display: block;
+    max-width: 560px;
+    margin: 0 auto;
+  }
+
+  .auth-context {
+    display: block;
+    border-right: 0;
+    border-bottom: 1px solid #dee2e6;
+    padding: 24px;
+  }
+
+  .auth-context h2 {
+    font-size: 22px;
+  }
+
+  .feature-list {
+    display: none;
+  }
+
+  .auth-form-pane {
+    padding: 28px 24px 32px;
+  }
+
+  .auth-heading {
+    margin-bottom: 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-icon {
+    animation-duration: 1.5s;
+  }
+}
+</style>
