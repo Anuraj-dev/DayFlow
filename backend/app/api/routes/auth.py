@@ -58,8 +58,21 @@ async def _session_user(
 
 @router.post("/sign-in", response_model=SignInResponse)
 async def sign_in(body: SignInRequest, db: AsyncSession = Depends(get_db)) -> SignInResponse:
-    email = normalize_email(str(body.email))
-    user = await db.scalar(select(User).where(func.lower(User.email) == email))
+    identifier = str(body.email).strip()
+    if "@" in identifier:
+        user = await db.scalar(
+            select(User).where(func.lower(User.email) == normalize_email(identifier))
+        )
+    else:
+        users = list(
+            await db.scalars(
+                select(User)
+                .join(Employee, Employee.user_id == User.id)
+                .where(func.upper(Employee.employee_code) == identifier.upper())
+                .limit(2)
+            )
+        )
+        user = users[0] if len(users) == 1 else None
     if user is None:
         verify_password(body.password, _MISSING_USER_HASH)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bad credentials.")
@@ -73,6 +86,15 @@ async def sign_in(body: SignInRequest, db: AsyncSession = Depends(get_db)) -> Si
     )
     if membership is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No organization membership.")
+
+    employee = await db.scalar(
+        select(Employee).where(
+            Employee.user_id == user.id,
+            Employee.organization_id == membership.organization_id,
+        )
+    )
+    if employee is not None and employee.status != EmployeeStatus.ACTIVE.value:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is locked or disabled.")
 
     user.last_login_at = datetime.now(UTC)
     await db.commit()

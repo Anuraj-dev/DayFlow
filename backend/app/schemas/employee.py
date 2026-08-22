@@ -92,8 +92,6 @@ class EmployeeCreateRequest(BaseModel):
     joined_on: date | None = None
 
 
-class EmployeeHireResponse(BaseModel):
-    employee: EmployeeSummary
-    invite_token: str
-    employee_code: str
+class EmployeeHireResponse(EmployeeSummary):
+    initial_password: str
     detail: str

@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { api, HttpError } from '@/api/client'
+import { api, getToken, HttpError } from '@/api/client'
 import { formatCurrency, formatDate, formatEnumLabel } from '@/lib/format'
 import { payrollStatusLabel, statusTone } from '@/lib/status'
 import { useSessionStore } from '@/stores/session'
@@ -211,8 +211,25 @@ async function downloadPayslip(recordId: string) {
   actionError.value = ''
   actionStatus.value = ''
   try {
-    await api(`/api/payroll/records/${recordId}/payslip`)
-    actionStatus.value = 'Payslip download prepared.'
+    const headers = new Headers({ Accept: 'text/html' })
+    const token = getToken()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    const response = await fetch(`/api/payroll/records/${recordId}/payslip`, { headers })
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { detail?: string }
+      throw new HttpError(response.status, payload.detail || response.statusText)
+    }
+    const disposition = response.headers.get('Content-Disposition') ?? ''
+    const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? `payslip-${recordId}.html`
+    const url = URL.createObjectURL(await response.blob())
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
+    actionStatus.value = 'Payslip downloaded.'
   } catch (err) {
     actionError.value = err instanceof HttpError ? err.detail : 'Could not download payslip.'
   }

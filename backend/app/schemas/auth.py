@@ -6,7 +6,7 @@ from app.domain.roles import Role
 
 
 class SignInRequest(BaseModel):
-    email: EmailStr
+    email: str = Field(min_length=1, max_length=320)
     password: str = Field(min_length=12)
 
 
