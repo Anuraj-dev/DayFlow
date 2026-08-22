@@ -14,8 +14,24 @@ class EmployeeSummary(BaseModel):
     first_name: str
     last_name: str
     status: EmployeeStatus
+    phone: str | None = None
+    address: str | None = None
     email: EmailStr | None = None
     role: Role | None = None
     department: str | None = None
     title: str | None = None
+    employment_type: str | None = None
+    location: str | None = None
     joined_on: date | None = None
+
+
+class EmployeeUpdateRequest(BaseModel):
+    phone: str | None = None
+    address: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    status: EmployeeStatus | None = None
+    title: str | None = None
+    department: str | None = None
+    employment_type: str | None = None
+    location: str | None = None
