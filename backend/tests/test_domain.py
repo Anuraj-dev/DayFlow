@@ -4,7 +4,12 @@ from decimal import Decimal
 import pytest
 
 from app.domain.attendance import AttendanceError, can_check_in, can_check_out, derive_day_status
-from app.domain.identity import can_read_employee
+from app.domain.identity import (
+    IdentityError,
+    assert_employee_patch_allowed,
+    can_edit_employee,
+    can_read_employee,
+)
 from app.domain.leave import (
     LeaveError,
     assert_can_submit,
@@ -20,6 +25,16 @@ def test_employee_cannot_read_another_record():
     assert can_read_employee(role=Role.EMPLOYEE, actor_employee_id=1, target_employee_id=1)
     assert not can_read_employee(role=Role.EMPLOYEE, actor_employee_id=1, target_employee_id=2)
     assert can_read_employee(role=Role.HR, actor_employee_id=1, target_employee_id=2)
+
+
+def test_employee_patch_field_permissions():
+    assert can_edit_employee(role=Role.EMPLOYEE, actor_employee_id=1, target_employee_id=1)
+    assert not can_edit_employee(role=Role.EMPLOYEE, actor_employee_id=1, target_employee_id=2)
+    assert can_edit_employee(role=Role.HR, actor_employee_id=1, target_employee_id=2)
+    assert_employee_patch_allowed(role=Role.EMPLOYEE, fields={"phone", "address"})
+    with pytest.raises(IdentityError):
+        assert_employee_patch_allowed(role=Role.EMPLOYEE, fields={"title"})
+    assert_employee_patch_allowed(role=Role.HR, fields={"title", "department", "employment_type"})
 
 
 def test_open_session_blocks_check_in():

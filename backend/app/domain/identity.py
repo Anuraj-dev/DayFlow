@@ -41,3 +41,38 @@ def can_read_employee(*, role: Role, actor_employee_id, target_employee_id) -> b
 
 def can_edit_job_or_salary(role: Role) -> bool:
     return role is Role.HR
+
+
+EMPLOYEE_SELF_EDIT_FIELDS = frozenset({"phone", "address"})
+HR_EMPLOYEE_EDIT_FIELDS = frozenset(
+    {
+        "phone",
+        "address",
+        "first_name",
+        "last_name",
+        "status",
+        "title",
+        "department",
+        "employment_type",
+        "location",
+    }
+)
+
+
+def can_edit_employee(*, role: Role, actor_employee_id, target_employee_id) -> bool:
+    if role is Role.HR:
+        return True
+    return actor_employee_id == target_employee_id
+
+
+def allowed_employee_patch_fields(role: Role) -> frozenset[str]:
+    if role is Role.HR:
+        return HR_EMPLOYEE_EDIT_FIELDS
+    return EMPLOYEE_SELF_EDIT_FIELDS
+
+
+def assert_employee_patch_allowed(*, role: Role, fields: set[str]) -> None:
+    allowed = allowed_employee_patch_fields(role)
+    forbidden = fields - allowed
+    if forbidden:
+        raise IdentityError(f"Cannot edit fields: {', '.join(sorted(forbidden))}.")
