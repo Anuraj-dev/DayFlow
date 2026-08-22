@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKey
@@ -38,7 +38,10 @@ class User(UUIDPrimaryKey, TimestampMixin, Base):
 
 class OrganizationMembership(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "organization_memberships"
-    __table_args__ = (UniqueConstraint("organization_id", "user_id"),)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "user_id"),
+        UniqueConstraint("user_id", name="uq_memberships_user_id"),
+    )
 
     organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
@@ -50,6 +53,15 @@ class OrganizationMembership(UUIDPrimaryKey, TimestampMixin, Base):
 
 class AccountInvite(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "account_invites"
+    __table_args__ = (
+        UniqueConstraint("token_hash"),
+        Index(
+            "uq_account_invites_open_employee",
+            "employee_id",
+            unique=True,
+            postgresql_where=text("accepted_at IS NULL"),
+        ),
+    )
 
     organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)
     employee_id: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), nullable=False)

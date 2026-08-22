@@ -1,7 +1,7 @@
 import hashlib
 from datetime import datetime
 
-from app.domain.roles import Role
+from app.domain.roles import EmployeeStatus, Role
 
 
 class IdentityError(ValueError):
@@ -29,14 +29,19 @@ def assert_invite_usable(*, accepted_at: datetime | None, expires_at: datetime, 
         raise IdentityError("This invite has expired.")
 
 
+def assert_employee_can_activate(*, user_id, status: str) -> None:
+    if user_id is not None or status != EmployeeStatus.INVITED.value:
+        raise IdentityError("This account has already been activated.")
+
+
 def is_hr(role: Role) -> bool:
     return role is Role.HR
 
 
 def can_read_employee(*, role: Role, actor_employee_id, target_employee_id) -> bool:
-    if role is Role.HR:
-        return True
-    return actor_employee_id == target_employee_id
+    """Directory cards are org-wide and view-only. Salary and edits stay HR-gated."""
+    del actor_employee_id, target_employee_id
+    return role in {Role.HR, Role.EMPLOYEE}
 
 
 def can_edit_job_or_salary(role: Role) -> bool:

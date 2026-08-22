@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import CurrentPrincipal, get_current_principal, require_hr
+from app.api.deps import CurrentPrincipal, get_current_principal
 from app.core.db import get_db
 from app.domain.identity import (
     IdentityError,
@@ -47,9 +47,45 @@ def _snapshot(employee: Employee) -> dict:
     return summary.model_dump(mode="json")
 
 
+async def _summaries(
+    db: AsyncSession, employees: list[Employee], organization_id: UUID
+) -> list[EmployeeSummary]:
+    user_ids = [employee.user_id for employee in employees if employee.user_id]
+    users_by_id: dict[UUID, User] = {}
+    memberships_by_user: dict[UUID, OrganizationMembership] = {}
+    if user_ids:
+        users_by_id = {
+            user.id: user
+            for user in (await db.scalars(select(User).where(User.id.in_(user_ids)))).all()
+        }
+        memberships_by_user = {
+            membership.user_id: membership
+            for membership in (
+                await db.scalars(
+                    select(OrganizationMembership).where(
+                        OrganizationMembership.organization_id == organization_id,
+                        OrganizationMembership.user_id.in_(user_ids),
+                    )
+                )
+            ).all()
+        }
+    out: list[EmployeeSummary] = []
+    for employee in employees:
+        user = users_by_id.get(employee.user_id) if employee.user_id else None
+        membership = memberships_by_user.get(employee.user_id) if employee.user_id else None
+        out.append(
+            _summary(
+                employee,
+                user.email if user else None,
+                membership.role if membership else None,
+            )
+        )
+    return out
+
+
 @router.get("", response_model=list[EmployeeSummary])
 async def list_employees(
-    principal: CurrentPrincipal = Depends(require_hr),
+    principal: CurrentPrincipal = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> list[EmployeeSummary]:
     result = await db.scalars(
@@ -58,23 +94,7 @@ async def list_employees(
         .options(selectinload(Employee.job_assignments))
         .order_by(Employee.employee_code)
     )
-    employees = list(result)
-    summaries: list[EmployeeSummary] = []
-    for employee in employees:
-        email = None
-        role = None
-        if employee.user_id:
-            user = await db.get(User, employee.user_id)
-            membership = await db.scalar(
-                select(OrganizationMembership).where(
-                    OrganizationMembership.user_id == employee.user_id,
-                    OrganizationMembership.organization_id == principal.organization_id,
-                )
-            )
-            email = user.email if user else None
-            role = membership.role if membership else None
-        summaries.append(_summary(employee, email, role))
-    return summaries
+    return await _summaries(db, list(result), principal.organization_id)
 
 
 @router.get("/{employee_id}", response_model=EmployeeSummary)
@@ -90,7 +110,7 @@ async def get_employee(
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Employees can read only their own record.",
+            detail="Not allowed to read this employee.",
         )
     employee = await db.scalar(
         select(Employee)
@@ -102,7 +122,7 @@ async def get_employee(
     )
     if employee is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found.")
-    return _summary(employee)
+    return (await _summaries(db, [employee], principal.organization_id))[0]
 
 
 @router.patch("/{employee_id}", response_model=EmployeeSummary)
@@ -177,4 +197,4 @@ async def patch_employee(
         .options(selectinload(Employee.job_assignments))
     )
     assert employee is not None
-    return _summary(employee)
+    return (await _summaries(db, [employee], principal.organization_id))[0]
