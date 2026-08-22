@@ -24,7 +24,7 @@ from app.domain.identity import (
     hash_invite_token,
     normalize_email,
 )
-from app.domain.leave import LeaveRequestStatus
+from app.domain.leave import DEFAULT_LEAVE_GRANTS, LeaveRequestStatus
 from app.domain.roles import EmployeeStatus, Role, UserStatus
 from app.models import (
     AccountInvite,
@@ -288,7 +288,7 @@ async def create_employee(
         )
     )
     year_start, year_end = date(year, 1, 1), date(year, 12, 31)
-    grants = {"PAID": 18.0, "SICK": 8.0, "UNPAID": 0.0}
+    grants = DEFAULT_LEAVE_GRANTS
     for leave_type in types:
         db.add(
             LeaveBalance(

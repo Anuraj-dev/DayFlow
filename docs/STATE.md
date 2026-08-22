@@ -24,6 +24,8 @@ Deferred:
 - Reports / analytics
 - Docker Hub publish
 
+Sick-leave requests may attach one optional PDF/JPEG/PNG certificate. Download is requester or same-org HR only. Seed and hire grants are Paid 24 / Sick 7 / Unpaid 0.
+
 People **nav** is HR-only. Employees can still open `/employees/:id` for a coworker if they have the UUID; the record is view-only and salary stays self/HR. Private and bank fields are omitted from directory and coworker GET; self and same-org HR may read them. Employees still self-edit only phone and address. Change password is `POST /api/auth/change-password` and requires the current password.
 
 ## 2026-08-22 — implementer-only, merge on green

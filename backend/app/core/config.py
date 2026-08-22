@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     seed_hr_password: str = "ChangeMe_HR12!"
     seed_employee_email: str = "employee@dayflow.demo"
     seed_employee_password: str = "ChangeMe_Emp12!"
+    storage_dir: str = ".local/storage"
 
     @property
     def cors_origin_list(self) -> list[str]:

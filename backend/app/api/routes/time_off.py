@@ -1,10 +1,13 @@
-from datetime import UTC, datetime
-from uuid import UUID
+from datetime import UTC, date, datetime
+from pathlib import Path
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
+from app.adapters.storage import storage_adapter
 from app.api.deps import CurrentPrincipal, get_current_principal, require_hr
 from app.core.db import get_db
 from app.domain.leave import (
@@ -13,8 +16,11 @@ from app.domain.leave import (
     assert_can_cancel,
     assert_can_review,
     assert_can_submit,
+    assert_certificate_allowed,
+    can_download_certificate,
     counted_days,
     remaining_balance,
+    sniff_certificate,
 )
 from app.domain.roles import Role
 from app.models import (
@@ -119,7 +125,27 @@ async def _pending_counted(db: AsyncSession, employee_id: UUID, leave_type_id: U
     return sum(row.counted_days for row in rows)
 
 
-def _request_out(row: LeaveRequest, leave_type_code: str, employee_name: str | None = None) -> LeaveRequestOut:
+def _certificate_url(request_id: UUID) -> str:
+    return f"/api/time-off/requests/{request_id}/certificate"
+
+
+def _request_out(
+    row: LeaveRequest,
+    leave_type_code: str,
+    employee_name: str | None = None,
+    *,
+    include_download: bool = False,
+) -> LeaveRequestOut:
+    has_certificate = bool(row.certificate_storage_key)
+    download_url = None
+    expires_at = None
+    if has_certificate and include_download:
+        signed = storage_adapter.sign(
+            row.certificate_storage_key or "",
+            download_url=_certificate_url(row.id),
+        )
+        download_url = signed.url
+        expires_at = signed.expires_at
     return LeaveRequestOut(
         id=row.id,
         employee_id=row.employee_id,
@@ -132,6 +158,9 @@ def _request_out(row: LeaveRequest, leave_type_code: str, employee_name: str | N
         employee_name=employee_name,
         review_comment=row.review_comment,
         submitted_at=row.submitted_at,
+        has_certificate=has_certificate,
+        certificate_download_url=download_url,
+        certificate_expires_at=expires_at,
     )
 
 
@@ -177,7 +206,16 @@ async def time_off_home(
             )
 
     requests = [
-        _request_out(row, type_by_id[row.leave_type_id].code, f"{person.first_name} {person.last_name}")
+        _request_out(
+            row,
+            type_by_id[row.leave_type_id].code,
+            f"{person.first_name} {person.last_name}",
+            include_download=can_download_certificate(
+                role=principal.role,
+                actor_employee_id=principal.employee_id,
+                request_employee_id=row.employee_id,
+            ),
+        )
         for row, person in request_rows
         if row.leave_type_id in type_by_id
     ]
@@ -196,16 +234,47 @@ async def time_off_home(
     )
 
 
+async def _create_body(request: Request) -> tuple[LeaveRequestCreate, bytes | None]:
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+        body = LeaveRequestCreate(
+            leave_type=str(form.get("leave_type") or ""),
+            starts_on=date.fromisoformat(str(form.get("starts_on"))),
+            ends_on=date.fromisoformat(str(form.get("ends_on"))),
+            reason=str(form.get("reason") or ""),
+        )
+        raw = form.get("certificate")
+        if isinstance(raw, StarletteUploadFile) and raw.filename:
+            data = await raw.read()
+            return body, data or None
+        return body, None
+    payload = await request.json()
+    return LeaveRequestCreate.model_validate(payload), None
+
+
 @router.post("/requests", response_model=LeaveRequestOut)
 async def create_leave_request(
-    body: LeaveRequestCreate,
+    request: Request,
     principal: CurrentPrincipal = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> LeaveRequestOut:
     _require_employee(principal)
+    try:
+        body, certificate_bytes = await _create_body(request)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Leave request is invalid.",
+        ) from exc
     if not body.reason.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A reason is required.")
     leave_type = await _leave_type(db, principal.organization_id, body.leave_type)
+    try:
+        assert_certificate_allowed(leave_type_code=leave_type.code, has_file=certificate_bytes is not None)
+        sniffed = sniff_certificate(certificate_bytes) if certificate_bytes is not None else None
+    except LeaveError as exc:
+        _raise_leave(exc)
     weekend_weekdays, holidays = await _work_context(db, principal.organization_id)
     try:
         counted = counted_days(
@@ -235,7 +304,15 @@ async def create_leave_request(
     except LeaveError as exc:
         _raise_leave(exc, conflict="overlap" in str(exc).lower())
 
+    request_id = uuid4()
+    storage_key = None
+    content_type = None
+    if certificate_bytes is not None and sniffed is not None:
+        content_type, suffix = sniffed
+        storage_key = f"{principal.organization_id}/leave/{request_id}/certificate{suffix}"
+        storage_adapter.put(storage_key, certificate_bytes, content_type)
     row = LeaveRequest(
+        id=request_id,
         employee_id=principal.employee_id,
         leave_type_id=leave_type.id,
         starts_on=body.starts_on,
@@ -244,11 +321,18 @@ async def create_leave_request(
         reason=body.reason.strip(),
         status=LeaveRequestStatus.PENDING.value,
         submitted_at=datetime.now(UTC),
+        certificate_storage_key=storage_key,
+        certificate_content_type=content_type,
     )
     db.add(row)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        if storage_key is not None:
+            storage_adapter.delete(storage_key)
+        raise
     await db.refresh(row)
-    return _request_out(row, leave_type.code)
+    return _request_out(row, leave_type.code, include_download=True)
 
 
 async def _org_request(db: AsyncSession, organization_id: UUID, request_id: UUID) -> LeaveRequest:
@@ -298,7 +382,41 @@ async def cancel_leave_request(
     row.status = LeaveRequestStatus.CANCELLED.value
     await db.commit()
     await db.refresh(row)
-    return _request_out(row, await _leave_type_code(db, row.leave_type_id))
+    return _request_out(
+        row,
+        await _leave_type_code(db, row.leave_type_id),
+        include_download=True,
+    )
+
+
+@router.get("/requests/{request_id}/certificate")
+async def download_leave_certificate(
+    request_id: UUID,
+    principal: CurrentPrincipal = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    row = await _org_request(db, principal.organization_id, request_id)
+    if not can_download_certificate(
+        role=principal.role,
+        actor_employee_id=principal.employee_id,
+        request_employee_id=row.employee_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to download this certificate.",
+        )
+    if not row.certificate_storage_key:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Certificate not found.")
+    try:
+        data, content_type = storage_adapter.get(row.certificate_storage_key)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Certificate not found.") from exc
+    suffix = Path(row.certificate_storage_key).suffix or ""
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="sick-certificate{suffix}"'},
+    )
 
 
 def _used_days(balance: LeaveBalance | None) -> float:
@@ -369,7 +487,7 @@ async def approve_leave_request(
     )
     await db.commit()
     await db.refresh(row)
-    return _request_out(row, leave_type.code)
+    return _request_out(row, leave_type.code, include_download=True)
 
 
 @router.post("/requests/{request_id}/reject", response_model=LeaveRequestOut)
@@ -420,4 +538,4 @@ async def reject_leave_request(
     )
     await db.commit()
     await db.refresh(row)
-    return _request_out(row, leave_type.code)
+    return _request_out(row, leave_type.code, include_download=True)

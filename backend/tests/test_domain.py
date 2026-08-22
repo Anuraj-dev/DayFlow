@@ -26,11 +26,15 @@ from app.domain.identity import (
     can_read_private_employee_fields,
 )
 from app.domain.leave import (
+    DEFAULT_LEAVE_GRANTS,
     LeaveError,
     assert_can_submit,
+    assert_certificate_allowed,
     assert_rejection_comment,
+    can_download_certificate,
     counted_days,
     ranges_overlap,
+    sniff_certificate,
 )
 from app.domain.payroll import (
     CalculationType,
@@ -120,6 +124,18 @@ def test_leave_overlap_and_weekends():
     with pytest.raises(LeaveError):
         assert_rejection_comment("")
     assert_rejection_comment("Missing coverage")
+    assert DEFAULT_LEAVE_GRANTS == {"PAID": 24.0, "SICK": 7.0, "UNPAID": 0.0}
+    assert_certificate_allowed(leave_type_code="SICK", has_file=True)
+    with pytest.raises(LeaveError, match="sick leave"):
+        assert_certificate_allowed(leave_type_code="PAID", has_file=True)
+    content_type, suffix = sniff_certificate(b"%PDF-1.4 sample")
+    assert content_type == "application/pdf"
+    assert suffix == ".pdf"
+    with pytest.raises(LeaveError, match="PDF, JPEG, or PNG"):
+        sniff_certificate(b"not-a-certificate")
+    assert can_download_certificate(role=Role.HR, actor_employee_id=1, request_employee_id=2)
+    assert can_download_certificate(role=Role.EMPLOYEE, actor_employee_id=1, request_employee_id=1)
+    assert not can_download_certificate(role=Role.EMPLOYEE, actor_employee_id=1, request_employee_id=2)
 
 
 def test_finalized_payroll_is_immutable():

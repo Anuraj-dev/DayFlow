@@ -158,6 +158,9 @@ export interface LeaveRequest {
   counted_days?: number
   reason?: string
   review_comment?: string | null
+  has_certificate?: boolean
+  certificate_download_url?: string | null
+  certificate_expires_at?: string | null
 }
 
 export interface TimeOffHome {

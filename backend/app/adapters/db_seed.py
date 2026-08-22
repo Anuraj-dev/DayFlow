@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.salary import assign_default_salary
 from app.core.config import get_settings
 from app.core.security import hash_password
+from app.domain.leave import DEFAULT_LEAVE_GRANTS
 from app.domain.payroll import PayrollPeriodStatus, signed_line_amount
 from app.domain.roles import EmployeeStatus, Role, UserStatus
 from app.models import (
@@ -140,14 +141,14 @@ async def seed_if_empty(session: AsyncSession) -> None:
                     leave_type_id=paid.id,
                     period_start=year_start,
                     period_end=year_end,
-                    granted_days=18,
+                    granted_days=DEFAULT_LEAVE_GRANTS["PAID"],
                 ),
                 LeaveBalance(
                     employee_id=employee.id,
                     leave_type_id=sick.id,
                     period_start=year_start,
                     period_end=year_end,
-                    granted_days=8,
+                    granted_days=DEFAULT_LEAVE_GRANTS["SICK"],
                 ),
                 LeaveBalance(
                     employee_id=employee.id,
