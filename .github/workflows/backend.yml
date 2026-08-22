@@ -1,0 +1,35 @@
+name: backend
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dayflow
+          POSTGRES_PASSWORD: dayflow
+          POSTGRES_DB: dayflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dayflow -d dayflow"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://dayflow:dayflow@localhost:5432/dayflow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run pytest
+        working-directory: backend
+        run: pytest -q
