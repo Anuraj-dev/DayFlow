@@ -22,6 +22,8 @@ from app.models import AccountInvite, Employee, OrganizationMembership, User
 from app.schemas.auth import (
     ActivateAccountRequest,
     ActivateAccountResponse,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     SessionUser,
     SignInRequest,
     SignInResponse,
@@ -161,6 +163,28 @@ async def activate_account(
     return ActivateAccountResponse(
         status="verification_sent",
         detail="Check your work email to verify this account.",
+    )
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+async def forgot_password(
+    body: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)
+) -> ForgotPasswordResponse:
+    email = normalize_email(str(body.email))
+    user = await db.scalar(select(User).where(func.lower(User.email) == email))
+    if user is not None and user.status == UserStatus.ACTIVE.value:
+        email_adapter.send(
+            EmailMessage(
+                to=email,
+                subject="Reset your Dayflow password",
+                body=(
+                    "A password reset was requested for this Dayflow account. "
+                    "SMTP is not enabled in the prototype; this console message is the reset payload."
+                ),
+            )
+        )
+    return ForgotPasswordResponse(
+        detail="If that work email is on file, a reset message has been sent.",
     )
 
 

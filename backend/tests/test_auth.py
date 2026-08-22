@@ -581,3 +581,18 @@ async def test_activate_account_stores_normalized_email(client: AsyncClient):
     )
     assert signed_in.status_code == 200
     assert signed_in.json()["user"]["email"] == invite_email
+
+
+async def test_forgot_password_same_message_for_known_and_unknown_email(client: AsyncClient):
+    known = await client.post(
+        "/api/auth/forgot-password",
+        json={"email": settings.seed_hr_email},
+    )
+    unknown = await client.post(
+        "/api/auth/forgot-password",
+        json={"email": "nobody@dayflow.demo"},
+    )
+    assert known.status_code == 200
+    assert unknown.status_code == 200
+    assert known.json()["detail"] == unknown.json()["detail"]
+    assert "reset" in known.json()["detail"].lower()
