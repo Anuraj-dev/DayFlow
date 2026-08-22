@@ -1,5 +1,12 @@
+function normalizeStatus(state: string | null | undefined): string {
+  return (state ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+}
+
 export function attendanceStatusLabel(state: string | null | undefined): string {
-  switch (state) {
+  switch (normalizeStatus(state)) {
     case 'not_checked_in':
       return 'Not checked in'
     case 'checked_in':
@@ -7,6 +14,7 @@ export function attendanceStatusLabel(state: string | null | undefined): string 
     case 'checked_out':
       return 'Checked out'
     case 'on_leave':
+    case 'leave':
       return 'On leave'
     case 'present':
       return 'Present'
@@ -14,10 +22,33 @@ export function attendanceStatusLabel(state: string | null | undefined): string 
       return 'Late'
     case 'half_day':
       return 'Half-day'
+    case 'open':
     case 'missing_check_out':
       return 'Missing check-out'
+    case 'absent':
+      return 'Absent'
+    case 'pending':
+    case 'correction_pending':
+    case 'correction_requested':
+      return 'Correction requested'
+    case 'approved':
+      return 'Approved'
+    case 'rejected':
+      return 'Rejected'
     default:
       return state ? state.replace(/_/g, ' ') : 'Unknown'
+  }
+}
+
+export function exceptionKindLabel(kind: string | null | undefined): string {
+  switch (normalizeStatus(kind)) {
+    case 'missing_check_out':
+      return 'Missing check-out'
+    case 'correction_pending':
+    case 'correction_requested':
+      return 'Correction requested'
+    default:
+      return attendanceStatusLabel(kind)
   }
 }
 
@@ -42,7 +73,19 @@ export function statusTone(label: string): 'neutral' | 'confirmed' | 'review' | 
   if (['rejected', 'locked', 'danger', 'missing check-out', 'inactive', 'missing document'].includes(value)) {
     return 'danger'
   }
-  if (['pending', 'draft', 'invited', 'not checked in', 'review', 'unsaved changes'].includes(value)) {
+  if (
+    [
+      'pending',
+      'draft',
+      'invited',
+      'not checked in',
+      'review',
+      'unsaved changes',
+      'late',
+      'half-day',
+      'correction requested',
+    ].includes(value)
+  ) {
     return 'review'
   }
   return 'neutral'

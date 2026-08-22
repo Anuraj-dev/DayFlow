@@ -67,10 +67,14 @@ export type DashboardPayload = EmployeeDashboard | HrDashboard
 
 export interface AttendanceSession {
   id: string
+  employee_id?: string
   work_date?: string
   check_in_at: string | null
   check_out_at: string | null
   status?: string
+  source?: string
+  worked_minutes?: number | null
+  correction_status?: string | null
 }
 
 export interface AttendanceException {
