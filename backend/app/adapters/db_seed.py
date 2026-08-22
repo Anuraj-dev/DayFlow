@@ -86,6 +86,28 @@ async def seed_if_empty(session: AsyncSession) -> None:
     session.add_all([hr_employee, staff_employee])
     await session.flush()
 
+    demo_profiles = [
+        ("OINEKA20250015", "Neha", "Kapoor", "+91-90000-00015", "Mumbai", date(2025, 6, 9), "Product Designer", "Product"),
+        ("OIVISI20240016", "Vikram", "Singh", "+91-90000-00016", "Delhi", date(2024, 11, 18), "Finance Analyst", "Finance"),
+        ("OISAKA20250017", "Sara", "Khan", "+91-90000-00017", "Hyderabad", date(2025, 8, 4), "Customer Success Lead", "Customer Success"),
+        ("OIARNA20260018", "Arjun", "Nair", "+91-90000-00018", "Bengaluru", date(2026, 1, 12), "Backend Engineer", "Engineering"),
+    ]
+    demo_people = [
+        Employee(
+            organization_id=org.id,
+            employee_code=code,
+            first_name=first_name,
+            last_name=last_name,
+            phone=phone,
+            address=location,
+            status=EmployeeStatus.ACTIVE.value,
+            joined_on=joined_on,
+        )
+        for code, first_name, last_name, phone, location, joined_on, _title, _department in demo_profiles
+    ]
+    session.add_all(demo_people)
+    await session.flush()
+
     session.add_all(
         [
             JobAssignment(
@@ -105,6 +127,28 @@ async def seed_if_empty(session: AsyncSession) -> None:
                 starts_on=date(2025, 3, 3),
             ),
             WorkPolicy(organization_id=org.id),
+        ]
+    )
+    session.add_all(
+        [
+            JobAssignment(
+                employee_id=employee.id,
+                title=title,
+                department=department,
+                employment_type="FULL_TIME",
+                location=location,
+                starts_on=employee.joined_on,
+            )
+            for employee, (
+                _code,
+                _first_name,
+                _last_name,
+                _phone,
+                location,
+                _joined_on,
+                title,
+                department,
+            ) in zip(demo_people, demo_profiles, strict=True)
         ]
     )
 
@@ -133,7 +177,7 @@ async def seed_if_empty(session: AsyncSession) -> None:
     await session.flush()
 
     year_start, year_end = date(2026, 1, 1), date(2026, 12, 31)
-    for employee in (hr_employee, staff_employee):
+    for employee in (hr_employee, staff_employee, *demo_people):
         session.add_all(
             [
                 LeaveBalance(
@@ -166,6 +210,13 @@ async def seed_if_empty(session: AsyncSession) -> None:
         employee_id=staff_employee.id,
         effective_from=date(2025, 3, 3),
     )
+    for employee in demo_people:
+        await assign_default_salary(
+            session,
+            organization_id=org.id,
+            employee_id=employee.id,
+            effective_from=employee.joined_on or date(2026, 1, 1),
+        )
     components = {
         component.code.upper(): component
         for component in (
