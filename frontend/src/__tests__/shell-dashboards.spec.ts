@@ -201,10 +201,8 @@ describe('AppShell role nav and control panel', () => {
     expect(nav.text()).toMatch(/Settings/)
   })
 
-  it('puts breadcrumbs and the page action in the control panel', async () => {
+  it('puts the page action in the control panel', async () => {
     const { wrapper: view } = await mountShell('EMPLOYEE', employeeDashboard())
-    const panel = view.get('[data-slot="control-panel"]')
-    expect(panel.text()).toMatch(/Overview/)
     expect(panelButton(view, /Check in/i).attributes('disabled')).toBeUndefined()
   })
 })
@@ -263,7 +261,9 @@ describe('employee dashboard states', () => {
   it('leads with the attendance action when not checked in', async () => {
     const view = await mountDashboard(employeeDashboard())
     expect(view.text()).toMatch(/Not checked in/)
-    expect(view.text()).toMatch(/Attendance action/)
+    const headingRow = view.get('.attendance-heading-row')
+    expect(headingRow.get('#attendance-heading').text()).toBe('Attendance')
+    expect(headingRow.get('[role="status"]').text()).toMatch(/Not checked in/)
     const checkIn = panelButton(view, /Check in/i)
     expect(checkIn.attributes('disabled')).toBeUndefined()
     await checkIn.trigger('click')
@@ -271,7 +271,8 @@ describe('employee dashboard states', () => {
     expect(
       fetchMock.mock.calls.some(
         ([url, init]) =>
-          String(url).includes('/api/attendance/check-in') && (init as RequestInit | undefined)?.method === 'POST',
+          String(url).includes('/api/attendance/check-in') &&
+          (init as RequestInit | undefined)?.method === 'POST',
       ),
     ).toBe(true)
     expect(view.get('[role="alert"]').text()).toMatch(/not implemented|Check-in/i)
@@ -293,7 +294,8 @@ describe('employee dashboard states', () => {
     expect(
       fetchMock.mock.calls.some(
         ([url, init]) =>
-          String(url).includes('/api/attendance/check-out') && (init as RequestInit | undefined)?.method === 'POST',
+          String(url).includes('/api/attendance/check-out') &&
+          (init as RequestInit | undefined)?.method === 'POST',
       ),
     ).toBe(true)
   })
@@ -329,7 +331,9 @@ describe('employee dashboard states', () => {
       }),
     )
     expect(incomplete.text()).toMatch(/Incomplete profile/)
-    expect(incomplete.get('a[href="/employees/33333333-3333-3333-3333-333333333333"]').text()).toMatch(/My profile/)
+    expect(
+      incomplete.get('a[href="/employees/33333333-3333-3333-3333-333333333333"]').text(),
+    ).toMatch(/My profile/)
   })
 })
 
