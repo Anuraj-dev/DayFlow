@@ -17,13 +17,14 @@ Deferred:
 
 - Settings UI (policies are seeded)
 - Document upload
+- Profile picture upload (`profile_image_key` is unused)
 - SMTP (console email adapter)
 - Forgot-password mail
 - Alembic migrations (`create_all` on startup)
 - Reports / analytics
 - Docker Hub publish
 
-People **nav** is HR-only. Employees can still open `/employees/:id` for a coworker if they have the UUID; the record is view-only and salary stays self/HR.
+People **nav** is HR-only. Employees can still open `/employees/:id` for a coworker if they have the UUID; the record is view-only and salary stays self/HR. Private and bank fields are omitted from directory and coworker GET; self and same-org HR may read them. Employees still self-edit only phone and address. Change password is `POST /api/auth/change-password` and requires the current password.
 
 ## 2026-08-22 — implementer-only, merge on green
 

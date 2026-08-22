@@ -22,6 +22,8 @@ from app.models import AccountInvite, Employee, OrganizationMembership, User
 from app.schemas.auth import (
     ActivateAccountRequest,
     ActivateAccountResponse,
+    ChangePasswordRequest,
+    ChangePasswordResponse,
     ForgotPasswordRequest,
     ForgotPasswordResponse,
     SessionUser,
@@ -164,6 +166,22 @@ async def activate_account(
         status="verification_sent",
         detail="Check your work email to verify this account.",
     )
+
+
+@router.post("/change-password", response_model=ChangePasswordResponse)
+async def change_password(
+    body: ChangePasswordRequest,
+    principal: CurrentPrincipal = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db),
+) -> ChangePasswordResponse:
+    if not verify_password(body.current_password, principal.user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect.",
+        )
+    principal.user.password_hash = hash_password(body.new_password)
+    await db.commit()
+    return ChangePasswordResponse(detail="Password changed.")
 
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)

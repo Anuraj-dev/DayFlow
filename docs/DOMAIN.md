@@ -25,7 +25,7 @@ Domain model and rules for the hackathon MVP. This is not an API spec or a migra
 
 `employees`
 
-- `id`, `organization_id`, `user_id`, `employee_code`, `first_name`, `last_name`, `phone`, `address`, `profile_image_key`, `status`, `joined_on`, `manager_employee_id`
+- `id`, `organization_id`, `user_id`, `employee_code`, `first_name`, `last_name`, `phone`, `address`, `date_of_birth`, `nationality`, `gender`, `marital_status`, `personal_email`, `bank_account_number`, `bank_name`, `ifsc`, `pan`, `uan`, `profile_image_key`, `status`, `joined_on`, `manager_employee_id`
 - Unique on organization and employee code
 
 `job_assignments`

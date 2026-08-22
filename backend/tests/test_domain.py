@@ -10,6 +10,7 @@ from app.domain.identity import (
     build_employee_code,
     can_edit_employee,
     can_read_employee,
+    can_read_private_employee_fields,
 )
 from app.domain.leave import (
     LeaveError,
@@ -56,7 +57,22 @@ def test_employee_patch_field_permissions():
     assert_employee_patch_allowed(role=Role.EMPLOYEE, fields={"phone", "address"})
     with pytest.raises(IdentityError):
         assert_employee_patch_allowed(role=Role.EMPLOYEE, fields={"title"})
+    with pytest.raises(IdentityError, match="pan"):
+        assert_employee_patch_allowed(role=Role.EMPLOYEE, fields={"pan"})
     assert_employee_patch_allowed(role=Role.HR, fields={"title", "department", "employment_type"})
+    assert_employee_patch_allowed(
+        role=Role.HR,
+        fields={"date_of_birth", "personal_email", "pan", "bank_account_number", "ifsc", "uan"},
+    )
+    assert can_read_private_employee_fields(
+        role=Role.EMPLOYEE, actor_employee_id=1, target_employee_id=1
+    )
+    assert not can_read_private_employee_fields(
+        role=Role.EMPLOYEE, actor_employee_id=1, target_employee_id=2
+    )
+    assert can_read_private_employee_fields(
+        role=Role.HR, actor_employee_id=1, target_employee_id=2
+    )
 
 
 def test_open_session_blocks_check_in():

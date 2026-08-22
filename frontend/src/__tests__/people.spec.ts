@@ -454,6 +454,130 @@ describe('Employee profile form sheet', () => {
     expect(wrapper.text()).toMatch(/Salary saved/)
   })
 
+  it('shows Private and Bank tabs for self, with private fields disabled for employees', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).includes('/salary')) {
+        return jsonResponse(200, salaryBreakdown())
+      }
+      return jsonResponse(
+        200,
+        person({
+          date_of_birth: '1994-04-12',
+          nationality: 'Indian',
+          gender: 'MALE',
+          marital_status: 'SINGLE',
+          personal_email: 'rohan.personal@example.com',
+          bank_account_number: '123456789012',
+          bank_name: 'HDFC Bank',
+          ifsc: 'HDFC0001234',
+          pan: 'ABCDE1234F',
+          uan: '100123456789',
+        }),
+      )
+    })
+
+    const { wrapper } = await mountProfile(`/employees/${SELF_ID}`, 'EMPLOYEE')
+    expect(wrapper.text()).toMatch(/Private/)
+    expect(wrapper.text()).toMatch(/Bank/)
+    expect(wrapper.text()).toMatch(/Security/)
+
+    await namedButton(wrapper, 'Edit').trigger('click')
+    await tabTrigger(wrapper, 'Private').trigger('click')
+    await nextTick()
+    expect(inputByLabel(wrapper, 'Date of birth').attributes('disabled')).toBeDefined()
+    expect(inputByLabel(wrapper, 'Personal email').attributes('disabled')).toBeDefined()
+    expect((inputByLabel(wrapper, 'Personal email').element as HTMLInputElement).value).toBe(
+      'rohan.personal@example.com',
+    )
+
+    await tabTrigger(wrapper, 'Bank').trigger('click')
+    await nextTick()
+    expect(inputByLabel(wrapper, 'PAN').attributes('disabled')).toBeDefined()
+    expect((inputByLabel(wrapper, 'PAN').element as HTMLInputElement).value).toBe('ABCDE1234F')
+  })
+
+  it('lets HR edit bank fields from the Bank tab', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/salary')) {
+        return jsonResponse(200, salaryBreakdown())
+      }
+      if (init?.method === 'PATCH') {
+        expect(JSON.parse(String(init.body))).toEqual({ pan: 'XYZAB9876C' })
+        return jsonResponse(200, person({ pan: 'XYZAB9876C' }))
+      }
+      return jsonResponse(200, person({ pan: 'ABCDE1234F' }))
+    })
+
+    const { wrapper } = await mountProfile(`/employees/${SELF_ID}`, 'HR')
+    await namedButton(wrapper, 'Edit').trigger('click')
+    await tabTrigger(wrapper, 'Bank').trigger('click')
+    await nextTick()
+    expect(inputByLabel(wrapper, 'PAN').attributes('disabled')).toBeUndefined()
+    await inputByLabel(wrapper, 'PAN').setValue('XYZAB9876C')
+    await nextTick()
+    await namedButton(wrapper, 'Save').trigger('click')
+    await flushPromises()
+    expect((inputByLabel(wrapper, 'PAN').element as HTMLInputElement).value).toBe('XYZAB9876C')
+  })
+
+  it('hides Private, Bank, and Security tabs on a coworker profile', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/salary')) {
+        return jsonResponse(403, { detail: 'Salary is visible only to HR or the employee.' })
+      }
+      return jsonResponse(200, person({ id: OTHER_ID, first_name: 'Hari', last_name: 'Rao' }))
+    })
+
+    const { wrapper } = await mountProfile(`/employees/${OTHER_ID}`, 'EMPLOYEE', SELF_ID)
+    expect(wrapper.text()).toMatch(/Personal/)
+    expect(wrapper.text()).not.toMatch(/\bPrivate\b/)
+    expect(wrapper.text()).not.toMatch(/\bBank\b/)
+    expect(wrapper.text()).not.toMatch(/Security/)
+    expect(wrapper.text()).not.toMatch(/ABCDE1234F/)
+  })
+
+  it('submits change-password from the Security tab and shows wrong-current-password errors', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/salary')) {
+        return jsonResponse(200, salaryBreakdown())
+      }
+      if (url.includes('/api/auth/change-password')) {
+        expect(init?.method).toBe('POST')
+        const body = JSON.parse(String(init?.body)) as {
+          current_password: string
+          new_password: string
+        }
+        if (body.current_password !== 'ChangeMe_Emp12!') {
+          return jsonResponse(400, { detail: 'Current password is incorrect.' })
+        }
+        expect(body).toEqual({
+          current_password: 'ChangeMe_Emp12!',
+          new_password: 'ChangeMe_New12!',
+        })
+        return jsonResponse(200, { detail: 'Password changed.' })
+      }
+      return jsonResponse(200, person())
+    })
+
+    const { wrapper } = await mountProfile(`/employees/${SELF_ID}`, 'EMPLOYEE')
+    await tabTrigger(wrapper, 'Security').trigger('click')
+    await nextTick()
+
+    await inputByLabel(wrapper, 'Current password').setValue('WrongPassword1!')
+    await inputByLabel(wrapper, 'New password').setValue('ChangeMe_New12!')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toMatch(/Current password is incorrect/i)
+
+    await inputByLabel(wrapper, 'Current password').setValue('ChangeMe_Emp12!')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toMatch(/Password changed/i)
+  })
+
   it('shows a deferred Documents tab with a missing-document status', async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       if (String(input).includes('/salary')) {

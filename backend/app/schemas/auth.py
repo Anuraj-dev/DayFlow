@@ -39,6 +39,15 @@ class SignInResponse(BaseModel):
     user: SessionUser
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=12)
+
+
+class ChangePasswordResponse(BaseModel):
+    detail: str
+
+
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 

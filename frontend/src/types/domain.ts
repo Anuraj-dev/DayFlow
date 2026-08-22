@@ -35,6 +35,16 @@ export interface EmployeeSummary {
   location?: string | null
   joined_on?: string | null
   presence?: string | null
+  date_of_birth?: string | null
+  nationality?: string | null
+  gender?: string | null
+  marital_status?: string | null
+  personal_email?: string | null
+  bank_account_number?: string | null
+  bank_name?: string | null
+  ifsc?: string | null
+  pan?: string | null
+  uan?: string | null
 }
 
 export interface ApiError {
