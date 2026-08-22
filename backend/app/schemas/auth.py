@@ -37,3 +37,11 @@ class SignInResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: SessionUser
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    detail: str
