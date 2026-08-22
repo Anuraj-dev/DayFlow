@@ -419,3 +419,162 @@ async def test_directory_includes_presence(client: AsyncClient):
     assert listed.status_code == 200
     for person in listed.json():
         assert person["presence"] in {"present", "on_leave", "absent", "none"}
+
+
+_PRIVATE_BANK_KEYS = (
+    "date_of_birth",
+    "nationality",
+    "gender",
+    "marital_status",
+    "personal_email",
+    "bank_account_number",
+    "bank_name",
+    "ifsc",
+    "pan",
+    "uan",
+)
+
+_PRIVATE_BANK_PAYLOAD = {
+    "date_of_birth": "1994-04-12",
+    "nationality": "Indian",
+    "gender": "MALE",
+    "marital_status": "SINGLE",
+    "personal_email": "rohan.personal@example.com",
+    "bank_account_number": "123456789012",
+    "bank_name": "HDFC Bank",
+    "ifsc": "HDFC0001234",
+    "pan": "ABCDE1234F",
+    "uan": "100123456789",
+}
+
+
+def _assert_omits_private_bank(body: dict) -> None:
+    for key in _PRIVATE_BANK_KEYS:
+        assert key not in body
+
+
+async def test_directory_omits_private_and_bank_fields(client: AsyncClient):
+    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
+    employee = await _sign_in(client, "employee@dayflow.demo", "ChangeMe_Emp12!")
+    employee_id = employee["user"]["employee_id"]
+    patched = await client.patch(
+        f"/api/employees/{employee_id}",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+        json=_PRIVATE_BANK_PAYLOAD,
+    )
+    assert patched.status_code == 200
+
+    listed = await client.get(
+        "/api/employees",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+    )
+    assert listed.status_code == 200
+    for person in listed.json():
+        _assert_omits_private_bank(person)
+
+    coworker = await client.get(
+        "/api/employees",
+        headers={"Authorization": f"Bearer {employee['access_token']}"},
+    )
+    assert coworker.status_code == 200
+    for person in coworker.json():
+        _assert_omits_private_bank(person)
+
+
+async def test_coworker_get_omits_private_and_bank_fields(client: AsyncClient):
+    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
+    employee = await _sign_in(client, "employee@dayflow.demo", "ChangeMe_Emp12!")
+    employee_id = employee["user"]["employee_id"]
+    patched = await client.patch(
+        f"/api/employees/{employee_id}",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+        json=_PRIVATE_BANK_PAYLOAD,
+    )
+    assert patched.status_code == 200
+
+    coworker = await client.get(
+        f"/api/employees/{employee_id}",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+    )
+    assert coworker.status_code == 200
+    for key, value in _PRIVATE_BANK_PAYLOAD.items():
+        assert coworker.json()[key] == value
+
+    peer = await client.get(
+        f"/api/employees/{hr['user']['employee_id']}",
+        headers={"Authorization": f"Bearer {employee['access_token']}"},
+    )
+    assert peer.status_code == 200
+    _assert_omits_private_bank(peer.json())
+    assert peer.json()["employee_code"] == "HR-001"
+
+
+async def test_self_and_hr_get_include_private_and_bank_fields(client: AsyncClient):
+    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
+    employee = await _sign_in(client, "employee@dayflow.demo", "ChangeMe_Emp12!")
+    employee_id = employee["user"]["employee_id"]
+    patched = await client.patch(
+        f"/api/employees/{employee_id}",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+        json=_PRIVATE_BANK_PAYLOAD,
+    )
+    assert patched.status_code == 200
+
+    own = await client.get(
+        f"/api/employees/{employee_id}",
+        headers={"Authorization": f"Bearer {employee['access_token']}"},
+    )
+    assert own.status_code == 200
+    for key, value in _PRIVATE_BANK_PAYLOAD.items():
+        assert own.json()[key] == value
+
+
+async def test_employee_cannot_patch_pan(client: AsyncClient):
+    session = await _sign_in(client, "employee@dayflow.demo", "ChangeMe_Emp12!")
+    employee_id = session["user"]["employee_id"]
+    response = await client.patch(
+        f"/api/employees/{employee_id}",
+        headers={"Authorization": f"Bearer {session['access_token']}"},
+        json={"pan": "ABCDE1234F"},
+    )
+    assert response.status_code == 403
+    assert "pan" in response.json()["detail"].lower()
+
+
+async def test_hr_patch_of_private_bank_fields_is_audited(client: AsyncClient):
+    from sqlalchemy import select
+
+    from app.models import AuditEvent
+
+    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
+    employee = await _sign_in(client, "employee@dayflow.demo", "ChangeMe_Emp12!")
+    employee_id = employee["user"]["employee_id"]
+    pan = f"P{uuid4().hex[:8].upper()}X"
+
+    response = await client.patch(
+        f"/api/employees/{employee_id}",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+        json={"pan": pan, "bank_name": "ICICI Bank", "ifsc": "ICIC0004321"},
+    )
+    assert response.status_code == 200
+    assert response.json()["pan"] == pan
+    assert response.json()["bank_name"] == "ICICI Bank"
+    assert response.json()["ifsc"] == "ICIC0004321"
+
+    async with SessionLocal() as db:
+        event = await db.scalar(
+            select(AuditEvent)
+            .where(
+                AuditEvent.entity_type == "employee",
+                AuditEvent.entity_id == employee_id,
+                AuditEvent.action == "employee.update",
+            )
+            .order_by(AuditEvent.created_at.desc())
+        )
+        assert event is not None
+        assert event.actor_user_id is not None
+        assert event.after_json is not None
+        assert event.after_json["pan"] == pan
+        assert event.after_json["bank_name"] == "ICICI Bank"
+        assert event.before_json is not None
+        assert event.before_json.get("pan") != pan

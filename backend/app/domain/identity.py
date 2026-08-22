@@ -65,11 +65,32 @@ def can_read_employee(*, role: Role, actor_employee_id, target_employee_id) -> b
     return role in {Role.HR, Role.EMPLOYEE}
 
 
+def can_read_private_employee_fields(*, role: Role, actor_employee_id, target_employee_id) -> bool:
+    """Private and bank fields are self or same-org HR only. Directory/coworker GET omit them."""
+    if role is Role.HR:
+        return True
+    return actor_employee_id is not None and actor_employee_id == target_employee_id
+
+
 def can_edit_job_or_salary(role: Role) -> bool:
     return role is Role.HR
 
 
 EMPLOYEE_SELF_EDIT_FIELDS = frozenset({"phone", "address"})
+PRIVATE_EMPLOYEE_FIELDS = frozenset(
+    {
+        "date_of_birth",
+        "nationality",
+        "gender",
+        "marital_status",
+        "personal_email",
+        "bank_account_number",
+        "bank_name",
+        "ifsc",
+        "pan",
+        "uan",
+    }
+)
 HR_EMPLOYEE_EDIT_FIELDS = frozenset(
     {
         "phone",
@@ -81,6 +102,7 @@ HR_EMPLOYEE_EDIT_FIELDS = frozenset(
         "department",
         "employment_type",
         "location",
+        *PRIVATE_EMPLOYEE_FIELDS,
     }
 )
 

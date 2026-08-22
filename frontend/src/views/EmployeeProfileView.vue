@@ -36,6 +36,16 @@ type Draft = {
   department: string
   employment_type: string
   location: string
+  date_of_birth: string
+  nationality: string
+  gender: string
+  marital_status: string
+  personal_email: string
+  bank_account_number: string
+  bank_name: string
+  ifsc: string
+  pan: string
+  uan: string
 }
 
 const EMPLOYEE_FIELDS = new Set<keyof Draft>(['phone', 'address'])
@@ -49,6 +59,16 @@ const HR_FIELDS = new Set<keyof Draft>([
   'department',
   'employment_type',
   'location',
+  'date_of_birth',
+  'nationality',
+  'gender',
+  'marital_status',
+  'personal_email',
+  'bank_account_number',
+  'bank_name',
+  'ifsc',
+  'pan',
+  'uan',
 ])
 
 const route = useRoute()
@@ -72,6 +92,11 @@ const tab = ref('personal')
 const editing = ref(false)
 const saving = ref(false)
 const controlActionsReady = ref(false)
+const currentPassword = ref('')
+const newPassword = ref('')
+const passwordError = ref('')
+const passwordStatus = ref('')
+const savingPassword = ref(false)
 const draft = reactive<Draft>({
   first_name: '',
   last_name: '',
@@ -82,6 +107,16 @@ const draft = reactive<Draft>({
   department: '',
   employment_type: '',
   location: '',
+  date_of_birth: '',
+  nationality: '',
+  gender: '',
+  marital_status: '',
+  personal_email: '',
+  bank_account_number: '',
+  bank_name: '',
+  ifsc: '',
+  pan: '',
+  uan: '',
 })
 
 const allowedFields = computed(() => (session.isHr ? HR_FIELDS : EMPLOYEE_FIELDS))
@@ -97,6 +132,16 @@ function snapshotFrom(row: EmployeeSummary): Draft {
     department: row.department ?? '',
     employment_type: row.employment_type ?? '',
     location: row.location ?? '',
+    date_of_birth: row.date_of_birth ?? '',
+    nationality: row.nationality ?? '',
+    gender: row.gender ?? '',
+    marital_status: row.marital_status ?? '',
+    personal_email: row.personal_email ?? '',
+    bank_account_number: row.bank_account_number ?? '',
+    bank_name: row.bank_name ?? '',
+    ifsc: row.ifsc ?? '',
+    pan: row.pan ?? '',
+    uan: row.uan ?? '',
   }
 }
 
@@ -120,6 +165,12 @@ const displayName = computed(() =>
 const pageHeading = computed(() =>
   errorTitle.value === 'Access denied' ? 'Access denied' : displayName.value,
 )
+
+const isSelf = computed(
+  () => Boolean(session.user?.employee_id) && session.user?.employee_id === person.value?.id,
+)
+
+const canViewPrivate = computed(() => session.isHr || isSelf.value)
 
 function calculationLabel(type: string): string {
   if (type === 'PERCENT_OF_WAGE') return '% of wage'
@@ -176,6 +227,10 @@ async function load() {
   salaryMissing.value = false
   salaryError.value = ''
   salaryStatus.value = ''
+  passwordError.value = ''
+  passwordStatus.value = ''
+  currentPassword.value = ''
+  newPassword.value = ''
   editing.value = false
   const employeeId = String(route.params.employeeId)
   try {
@@ -214,9 +269,9 @@ async function save() {
   saving.value = true
   saveError.value = ''
   saveStatus.value = ''
-  const payload: Record<string, string> = {}
+  const payload: Record<string, string | null> = {}
   for (const key of dirtyKeys.value) {
-    if (allowedFields.value.has(key)) payload[key] = draft[key]
+    if (allowedFields.value.has(key)) payload[key] = draft[key] === '' ? null : draft[key]
   }
   try {
     person.value = await api<EmployeeSummary>(`/api/employees/${person.value.id}`, {
@@ -261,6 +316,28 @@ async function saveSalary() {
     salaryError.value = err instanceof HttpError ? err.detail : 'Could not save salary.'
   } finally {
     savingSalary.value = false
+  }
+}
+
+async function changePassword() {
+  savingPassword.value = true
+  passwordError.value = ''
+  passwordStatus.value = ''
+  try {
+    const result = await api<{ detail: string }>('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({
+        current_password: currentPassword.value,
+        new_password: newPassword.value,
+      }),
+    })
+    currentPassword.value = ''
+    newPassword.value = ''
+    passwordStatus.value = result.detail
+  } catch (err) {
+    passwordError.value = err instanceof HttpError ? err.detail : 'Could not change password.'
+  } finally {
+    savingPassword.value = false
   }
 }
 
@@ -313,7 +390,7 @@ watch(
       <h1 class="sr-only">{{ pageHeading }}</h1>
     </Alert>
 
-    <form v-else-if="person" class="grid gap-4" @submit.prevent="save">
+    <div v-else-if="person" class="grid gap-4">
       <div
         v-if="!controlActionsReady"
         class="flex flex-wrap items-center justify-end gap-2 border-b border-[#DEE2E6] pb-3"
@@ -411,8 +488,11 @@ watch(
             <TabsList class="h-auto w-full justify-start overflow-x-auto">
               <TabsTrigger value="personal" @click="tab = 'personal'">Personal</TabsTrigger>
               <TabsTrigger value="job" @click="tab = 'job'">Job</TabsTrigger>
+              <TabsTrigger v-if="canViewPrivate" value="private" @click="tab = 'private'">Private</TabsTrigger>
+              <TabsTrigger v-if="canViewPrivate" value="bank" @click="tab = 'bank'">Bank</TabsTrigger>
               <TabsTrigger value="salary" @click="tab = 'salary'">Salary</TabsTrigger>
               <TabsTrigger value="documents" @click="tab = 'documents'">Documents</TabsTrigger>
+              <TabsTrigger v-if="isSelf" value="security" @click="tab = 'security'">Security</TabsTrigger>
             </TabsList>
             <TabsContent value="personal" class="grid max-w-xl gap-[5px] pt-4">
               <label class="grid gap-1 text-sm font-medium">
@@ -454,6 +534,63 @@ watch(
                   :tone="statusTone(employeeStatusLabel(draft.status))"
                 />
               </p>
+            </TabsContent>
+            <TabsContent v-if="canViewPrivate" value="private" class="grid max-w-xl gap-[5px] pt-4">
+              <label class="grid gap-1 text-sm font-medium">
+                Date of birth
+                <Input v-model="draft.date_of_birth" type="date" :disabled="!canEdit('date_of_birth')" />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Nationality
+                <Input v-model="draft.nationality" :disabled="!canEdit('nationality')" />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Gender
+                <NativeSelect v-model="draft.gender" class="w-full" :disabled="!canEdit('gender')">
+                  <NativeSelectOption value="">Not provided</NativeSelectOption>
+                  <NativeSelectOption value="MALE">Male</NativeSelectOption>
+                  <NativeSelectOption value="FEMALE">Female</NativeSelectOption>
+                  <NativeSelectOption value="OTHER">Other</NativeSelectOption>
+                  <NativeSelectOption value="PREFER_NOT_TO_SAY">Prefer not to say</NativeSelectOption>
+                </NativeSelect>
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Marital status
+                <NativeSelect v-model="draft.marital_status" class="w-full" :disabled="!canEdit('marital_status')">
+                  <NativeSelectOption value="">Not provided</NativeSelectOption>
+                  <NativeSelectOption value="SINGLE">Single</NativeSelectOption>
+                  <NativeSelectOption value="MARRIED">Married</NativeSelectOption>
+                  <NativeSelectOption value="DIVORCED">Divorced</NativeSelectOption>
+                  <NativeSelectOption value="WIDOWED">Widowed</NativeSelectOption>
+                  <NativeSelectOption value="OTHER">Other</NativeSelectOption>
+                </NativeSelect>
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Personal email
+                <Input v-model="draft.personal_email" type="email" :disabled="!canEdit('personal_email')" />
+              </label>
+            </TabsContent>
+            <TabsContent v-if="canViewPrivate" value="bank" class="grid max-w-xl gap-[5px] pt-4">
+              <label class="grid gap-1 text-sm font-medium">
+                Bank account number
+                <Input v-model="draft.bank_account_number" :disabled="!canEdit('bank_account_number')" />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Bank name
+                <Input v-model="draft.bank_name" :disabled="!canEdit('bank_name')" />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                IFSC
+                <Input v-model="draft.ifsc" :disabled="!canEdit('ifsc')" />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                PAN
+                <Input v-model="draft.pan" :disabled="!canEdit('pan')" />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                UAN
+                <Input v-model="draft.uan" :disabled="!canEdit('uan')" />
+              </label>
             </TabsContent>
             <TabsContent value="job" class="grid max-w-xl gap-[5px] pt-4">
               <label class="grid gap-1 text-sm font-medium">
@@ -552,10 +689,27 @@ watch(
                 Document uploads are not available yet. HR and employees will access private documents here when enabled.
               </p>
             </TabsContent>
+            <TabsContent v-if="isSelf" value="security" class="grid max-w-xl gap-[5px] pt-4">
+              <form class="grid gap-[5px]" @submit.prevent="changePassword">
+                <p v-if="passwordError" role="alert">{{ passwordError }}</p>
+                <p v-if="passwordStatus" class="feedback-success" role="status">{{ passwordStatus }}</p>
+                <label class="grid gap-1 text-sm font-medium">
+                  Current password
+                  <Input v-model="currentPassword" type="password" autocomplete="current-password" />
+                </label>
+                <label class="grid gap-1 text-sm font-medium">
+                  New password
+                  <Input v-model="newPassword" type="password" autocomplete="new-password" />
+                </label>
+                <Button type="submit" :disabled="savingPassword || !currentPassword || !newPassword">
+                  Change password
+                </Button>
+              </form>
+            </TabsContent>
           </Tabs>
         </div>
       </div>
-    </form>
+    </div>
   </section>
 </template>
 

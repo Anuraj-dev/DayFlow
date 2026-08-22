@@ -583,6 +583,68 @@ async def test_activate_account_stores_normalized_email(client: AsyncClient):
     assert signed_in.json()["user"]["email"] == invite_email
 
 
+async def test_change_password_requires_current_password_and_does_not_leak_email(
+    client: AsyncClient,
+):
+    session = await client.post(
+        "/api/auth/sign-in",
+        json={"email": "employee@dayflow.demo", "password": "ChangeMe_Emp12!"},
+    )
+    assert session.status_code == 200
+    token = session.json()["access_token"]
+
+    unauthenticated = await client.post(
+        "/api/auth/change-password",
+        json={"current_password": "ChangeMe_Emp12!", "new_password": "ChangeMe_New12!"},
+    )
+    assert unauthenticated.status_code == 401
+
+    wrong = await client.post(
+        "/api/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "WrongPassword1!", "new_password": "ChangeMe_New12!"},
+    )
+    assert wrong.status_code == 400
+    detail = wrong.json()["detail"].lower()
+    assert "current password" in detail
+    assert "employee@dayflow.demo" not in detail
+    assert "email" not in detail
+
+    still_old = await client.post(
+        "/api/auth/sign-in",
+        json={"email": "employee@dayflow.demo", "password": "ChangeMe_Emp12!"},
+    )
+    assert still_old.status_code == 200
+
+    changed = await client.post(
+        "/api/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "ChangeMe_Emp12!", "new_password": "ChangeMe_New12!"},
+    )
+    try:
+        assert changed.status_code == 200
+        assert "employee@dayflow.demo" not in changed.json()["detail"].lower()
+
+        old_rejected = await client.post(
+            "/api/auth/sign-in",
+            json={"email": "employee@dayflow.demo", "password": "ChangeMe_Emp12!"},
+        )
+        assert old_rejected.status_code == 401
+
+        new_accepted = await client.post(
+            "/api/auth/sign-in",
+            json={"email": "employee@dayflow.demo", "password": "ChangeMe_New12!"},
+        )
+        assert new_accepted.status_code == 200
+    finally:
+        if changed.status_code == 200:
+            await client.post(
+                "/api/auth/change-password",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"current_password": "ChangeMe_New12!", "new_password": "ChangeMe_Emp12!"},
+            )
+
+
 async def test_forgot_password_same_message_for_known_and_unknown_email(client: AsyncClient):
     known = await client.post(
         "/api/auth/forgot-password",

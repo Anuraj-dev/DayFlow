@@ -14,11 +14,13 @@ from app.api.deps import CurrentPrincipal, get_current_principal, require_hr
 from app.core.db import get_db
 from app.domain.attendance import derive_presence
 from app.domain.identity import (
+    PRIVATE_EMPLOYEE_FIELDS,
     IdentityError,
     assert_employee_patch_allowed,
     build_employee_code,
     can_edit_employee,
     can_read_employee,
+    can_read_private_employee_fields,
     hash_invite_token,
     normalize_email,
 )
@@ -39,6 +41,7 @@ from app.models import (
 )
 from app.schemas.employee import (
     EmployeeCreateRequest,
+    EmployeeDetail,
     EmployeeHireResponse,
     EmployeeSummary,
     EmployeeUpdateRequest,
@@ -47,7 +50,9 @@ from app.schemas.employee import (
 router = APIRouter(prefix="/employees", tags=["employees"])
 
 _JOB_FIELDS = frozenset({"title", "department", "employment_type", "location"})
-_EMPLOYEE_FIELDS = frozenset({"phone", "address", "first_name", "last_name", "status"})
+_EMPLOYEE_FIELDS = frozenset(
+    {"phone", "address", "first_name", "last_name", "status", *PRIVATE_EMPLOYEE_FIELDS}
+)
 _REQUIRED_PATCH_FIELDS = frozenset(
     {"first_name", "last_name", "status", "title", "department", "employment_type", "location"}
 )
@@ -79,9 +84,40 @@ def _summary(
     )
 
 
+def _private_fields(employee: Employee) -> dict:
+    return {
+        "date_of_birth": employee.date_of_birth,
+        "nationality": employee.nationality,
+        "gender": employee.gender,
+        "marital_status": employee.marital_status,
+        "personal_email": employee.personal_email,
+        "bank_account_number": employee.bank_account_number,
+        "bank_name": employee.bank_name,
+        "ifsc": employee.ifsc,
+        "pan": employee.pan,
+        "uan": employee.uan,
+    }
+
+
+def _detail(
+    employee: Employee,
+    email: str | None = None,
+    role: str | None = None,
+    presence: str | None = None,
+    *,
+    include_private: bool,
+) -> EmployeeDetail:
+    data = _summary(employee, email, role, presence).model_dump()
+    if include_private:
+        data.update(_private_fields(employee))
+    return EmployeeDetail.model_validate(data)
+
+
 def _snapshot(employee: Employee) -> dict:
-    summary = _summary(employee)
-    return summary.model_dump(mode="json")
+    data = _summary(employee).model_dump(mode="json")
+    for key, value in _private_fields(employee).items():
+        data[key] = value.isoformat() if hasattr(value, "isoformat") and value is not None else value
+    return data
 
 
 async def _summaries(
@@ -315,12 +351,12 @@ async def create_employee(
     )
 
 
-@router.get("/{employee_id}", response_model=EmployeeSummary)
+@router.get("/{employee_id}", response_model=EmployeeDetail, response_model_exclude_unset=True)
 async def get_employee(
     employee_id: UUID,
     principal: CurrentPrincipal = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db),
-) -> EmployeeSummary:
+) -> EmployeeDetail:
     if not can_read_employee(
         role=principal.role,
         actor_employee_id=principal.employee_id,
@@ -340,16 +376,27 @@ async def get_employee(
     )
     if employee is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found.")
-    return (await _summaries(db, [employee], principal.organization_id))[0]
+    summary = (await _summaries(db, [employee], principal.organization_id))[0]
+    return _detail(
+        employee,
+        summary.email,
+        summary.role,
+        summary.presence,
+        include_private=can_read_private_employee_fields(
+            role=principal.role,
+            actor_employee_id=principal.employee_id,
+            target_employee_id=employee.id,
+        ),
+    )
 
 
-@router.patch("/{employee_id}", response_model=EmployeeSummary)
+@router.patch("/{employee_id}", response_model=EmployeeDetail, response_model_exclude_unset=True)
 async def patch_employee(
     employee_id: UUID,
     body: EmployeeUpdateRequest,
     principal: CurrentPrincipal = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db),
-) -> EmployeeSummary:
+) -> EmployeeDetail:
     if not can_edit_employee(
         role=principal.role,
         actor_employee_id=principal.employee_id,
@@ -361,6 +408,8 @@ async def patch_employee(
         )
 
     updates = body.model_dump(exclude_unset=True, mode="json")
+    if isinstance(updates.get("date_of_birth"), str):
+        updates["date_of_birth"] = date.fromisoformat(updates["date_of_birth"])
     try:
         assert_employee_patch_allowed(role=principal.role, fields=set(updates))
     except IdentityError as exc:
@@ -436,4 +485,15 @@ async def patch_employee(
         .options(selectinload(Employee.job_assignments))
     )
     assert employee is not None
-    return (await _summaries(db, [employee], principal.organization_id))[0]
+    summary = (await _summaries(db, [employee], principal.organization_id))[0]
+    return _detail(
+        employee,
+        summary.email,
+        summary.role,
+        summary.presence,
+        include_private=can_read_private_employee_fields(
+            role=principal.role,
+            actor_employee_id=principal.employee_id,
+            target_employee_id=employee.id,
+        ),
+    )
