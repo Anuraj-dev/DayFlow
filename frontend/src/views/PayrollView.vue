@@ -445,18 +445,20 @@ watch(selectedPeriodId, () => {
               <TableRow>
                 <TableHead>Employee</TableHead>
                 <TableHead class="text-right">Net</TableHead>
+                <TableHead>Payable days</TableHead>
                 <TableHead>Status</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               <TableRow v-if="!selectedRecords.length">
-                <TableCell colspan="3">No payroll records.</TableCell>
+                <TableCell colspan="4">No payroll records.</TableCell>
               </TableRow>
               <TableRow v-for="row in selectedRecords" :key="row.id">
                 <TableCell>{{ personName(row.employee_id, row.employee_name) }}</TableCell>
                 <TableCell class="text-right tabular-nums">
                   {{ formatCurrency(row.currency, row.net_amount) }}
                 </TableCell>
+                <TableCell>{{ row.payable_days ?? '—' }} / {{ row.scheduled_days ?? '—' }}</TableCell>
                 <TableCell>
                   <StatusBadge
                     :label="row.published_at ? 'Published' : 'Draft'"
@@ -547,6 +549,12 @@ watch(selectedPeriodId, () => {
                   {{ formatCurrency(currentRecord.currency, currentRecord.net_amount) }}
                 </dd>
               </div>
+              <div>
+                <dt>Payable days</dt>
+                <dd class="tabular-nums">
+                  {{ currentRecord.payable_days ?? '—' }} / {{ currentRecord.scheduled_days ?? '—' }}
+                </dd>
+              </div>
             </dl>
 
             <div class="hidden sm:block">
@@ -558,6 +566,7 @@ watch(selectedPeriodId, () => {
                     <TableHead>Pay date</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead class="text-right">Net</TableHead>
+                    <TableHead>Payable days</TableHead>
                     <TableHead class="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -575,6 +584,9 @@ watch(selectedPeriodId, () => {
                     </TableCell>
                     <TableCell class="text-right tabular-nums">
                       {{ formatCurrency(currentRecord.currency, currentRecord.net_amount) }}
+                    </TableCell>
+                    <TableCell>
+                      {{ currentRecord.payable_days ?? '—' }} / {{ currentRecord.scheduled_days ?? '—' }}
                     </TableCell>
                     <TableCell class="text-right">
                       <Button type="button" size="sm" @click="downloadPayslip(currentRecord.id)">

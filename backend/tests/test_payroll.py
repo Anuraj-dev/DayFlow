@@ -9,10 +9,13 @@ from app.core.db import SessionLocal
 from app.core.security import hash_password
 from app.domain.payroll import PayrollPeriodStatus
 from app.domain.roles import EmployeeStatus, Role, UserStatus
+from app.adapters.salary import assign_default_salary
+from app.domain.attendance import scheduled_dates
 from app.models import (
     AttendanceSession,
     AuditEvent,
     Employee,
+    Holiday,
     LeaveBalance,
     LeaveRequest,
     LeaveType,
@@ -21,6 +24,7 @@ from app.models import (
     PayrollPeriod,
     PayrollRecord,
     User,
+    WorkPolicy,
 )
 
 PASSWORD = "ChangeMe_Emp12!"
@@ -187,6 +191,64 @@ async def _draft_period_for_demo() -> str:
         return str(period.id)
 
 
+async def _ensure_present_days(employee_id: str, starts_on: date, ends_on: date) -> None:
+    async with SessionLocal() as session:
+        org = await session.scalar(_select_org())
+        assert org is not None
+        policy = await session.scalar(select(WorkPolicy).where(WorkPolicy.organization_id == org.id))
+        workweek = policy.workweek if policy and policy.workweek else [0, 1, 2, 3, 4]
+        holidays = set(await session.scalars(select(Holiday.date).where(Holiday.organization_id == org.id)))
+        people = {employee_id}
+        people.update(
+            str(row)
+            for row in await session.scalars(select(Employee.id).where(Employee.organization_id == org.id))
+        )
+        days = scheduled_dates(starts_on, ends_on, workweek=workweek, holidays=holidays)
+        open_rows = list(
+            await session.scalars(
+                select(AttendanceSession)
+                .join(Employee, Employee.id == AttendanceSession.employee_id)
+                .where(
+                    Employee.organization_id == org.id,
+                    AttendanceSession.status == "OPEN",
+                    AttendanceSession.work_date >= starts_on,
+                    AttendanceSession.work_date <= ends_on,
+                )
+            )
+        )
+        for row in open_rows:
+            row.check_out_at = datetime(
+                row.work_date.year, row.work_date.month, row.work_date.day, 12, 30, tzinfo=UTC
+            )
+            row.status = "PRESENT"
+            row.worked_minutes = 540
+        for person_id in people:
+            existing = set(
+                await session.scalars(
+                    select(AttendanceSession.work_date).where(
+                        AttendanceSession.employee_id == person_id,
+                        AttendanceSession.work_date >= starts_on,
+                        AttendanceSession.work_date <= ends_on,
+                    )
+                )
+            )
+            for day in days:
+                if day in existing:
+                    continue
+                session.add(
+                    AttendanceSession(
+                        employee_id=person_id,
+                        work_date=day,
+                        check_in_at=datetime(day.year, day.month, day.day, 3, 30, tzinfo=UTC),
+                        check_out_at=datetime(day.year, day.month, day.day, 12, 30, tzinfo=UTC),
+                        source="SERVER",
+                        status="PRESENT",
+                        worked_minutes=540,
+                    )
+                )
+        await session.commit()
+
+
 def _salary_url(employee_id: str) -> str:
     return f"/api/payroll/employees/{employee_id}/salary"
 
@@ -315,6 +377,7 @@ async def test_hr_finalize_snapshots_salary_and_locks_period(client: AsyncClient
     salary = await client.get(_salary_url(employee_id), headers=headers, params={"as_of": "2026-09-30"})
     assert salary.status_code == 200
     assert salary.json()["monthly_wage"] == "50000.00"
+    await _ensure_present_days(employee_id, date(2026, 9, 1), date(2026, 9, 30))
 
     finalized = await client.post(f"/api/payroll/periods/{period_id}/finalize", headers=headers)
     assert finalized.status_code == 200
@@ -330,6 +393,8 @@ async def test_hr_finalize_snapshots_salary_and_locks_period(client: AsyncClient
     assert record["net_amount"] == "46800.00"
     assert record["currency"] == "INR"
     assert record["published_at"] is None
+    assert record["scheduled_days"] == "22.00"
+    assert record["payable_days"] == "22.00"
     codes = {line["code"]: line["amount"] for line in record["lines"]}
     assert codes["BASIC"] == "25000.00"
     assert codes["HRA"] == "12500.00"
@@ -415,6 +480,7 @@ async def test_publish_makes_payslips_visible_to_employee(client: AsyncClient):
     assert before_finalize.status_code == 409
     assert before_finalize.json()["detail"] == "A payroll period must be finalized before it is published."
 
+    await _ensure_present_days(employee_id, date(2026, 9, 1), date(2026, 9, 30))
     finalized = await client.post(f"/api/payroll/periods/{period_id}/finalize", headers=headers)
     assert finalized.status_code == 200
     staff_record = next(row for row in finalized.json()["records"] if row["employee_id"] == employee_id)
@@ -699,3 +765,146 @@ async def test_payroll_mutations_are_organization_scoped(client: AsyncClient):
     publish = await client.post(f"/api/payroll/periods/{foreign_period_id}/publish", headers=headers)
     assert publish.status_code == 404
     assert publish.json()["detail"] == "Payroll period not found."
+
+
+async def _isolated_payroll_org(suffix: str) -> tuple[str, str, str, str]:
+    email = f"hr.paydays.{suffix}@dayflow.demo"
+    async with SessionLocal() as session:
+        org = Organization(name=f"Pay Days {suffix}", timezone="Asia/Kolkata", currency="INR")
+        session.add(org)
+        await session.flush()
+        session.add(WorkPolicy(organization_id=org.id))
+        hr_user = User(
+            email=email,
+            password_hash=hash_password(PASSWORD),
+            email_verified_at=datetime.now(UTC),
+            status=UserStatus.ACTIVE.value,
+        )
+        session.add(hr_user)
+        await session.flush()
+        session.add(OrganizationMembership(organization_id=org.id, user_id=hr_user.id, role=Role.HR.value))
+        employee = Employee(
+            organization_id=org.id,
+            user_id=hr_user.id,
+            employee_code=f"PD-{suffix[:4].upper()}",
+            first_name="Pay",
+            last_name="Days",
+            status=EmployeeStatus.ACTIVE.value,
+            joined_on=date(2026, 1, 1),
+        )
+        session.add(employee)
+        await session.flush()
+        await assign_default_salary(
+            session,
+            organization_id=org.id,
+            employee_id=employee.id,
+            effective_from=date(2026, 1, 1),
+        )
+        period = PayrollPeriod(
+            organization_id=org.id,
+            starts_on=date(2026, 9, 1),
+            ends_on=date(2026, 9, 4),
+            pay_date=date(2026, 9, 5),
+            status=PayrollPeriodStatus.DRAFT.value,
+        )
+        session.add(period)
+        await session.commit()
+        return email, PASSWORD, str(employee.id), str(period.id)
+
+
+async def test_finalize_blocked_by_open_session_in_period(client: AsyncClient):
+    suffix = uuid4().hex[:8]
+    email, password, employee_id, period_id = await _isolated_payroll_org(suffix)
+    async with SessionLocal() as session:
+        session.add(
+            AttendanceSession(
+                employee_id=employee_id,
+                work_date=date(2026, 9, 1),
+                check_in_at=datetime(2026, 9, 1, 3, 30, tzinfo=UTC),
+                source="SERVER",
+                status="OPEN",
+            )
+        )
+        await session.commit()
+
+    hr = await _sign_in(client, email, password)
+    headers = {"Authorization": f"Bearer {hr['access_token']}"}
+    blocked = await client.post(f"/api/payroll/periods/{period_id}/finalize", headers=headers)
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "Open attendance sessions in this period block finalization."
+
+
+async def test_finalize_prorates_by_payable_days_and_snapshots_counts(client: AsyncClient):
+    from app.domain.payroll import compute_salary, default_salary_structure, prorate_computed_salary
+
+    suffix = uuid4().hex[:8]
+    email, password, employee_id, period_id = await _isolated_payroll_org(suffix)
+    async with SessionLocal() as session:
+        unpaid = LeaveType(
+            organization_id=(await session.get(Employee, employee_id)).organization_id,
+            name="Unpaid leave",
+            code="UNPAID",
+            is_paid=False,
+            requires_balance=False,
+        )
+        session.add(unpaid)
+        await session.flush()
+        session.add_all(
+            [
+                AttendanceSession(
+                    employee_id=employee_id,
+                    work_date=date(2026, 9, 1),
+                    check_in_at=datetime(2026, 9, 1, 3, 30, tzinfo=UTC),
+                    check_out_at=datetime(2026, 9, 1, 12, 30, tzinfo=UTC),
+                    source="SERVER",
+                    status="PRESENT",
+                    worked_minutes=540,
+                ),
+                AttendanceSession(
+                    employee_id=employee_id,
+                    work_date=date(2026, 9, 2),
+                    check_in_at=datetime(2026, 9, 2, 3, 30, tzinfo=UTC),
+                    check_out_at=datetime(2026, 9, 2, 8, 0, tzinfo=UTC),
+                    source="SERVER",
+                    status="HALF_DAY",
+                    worked_minutes=270,
+                ),
+                LeaveRequest(
+                    employee_id=employee_id,
+                    leave_type_id=unpaid.id,
+                    starts_on=date(2026, 9, 3),
+                    ends_on=date(2026, 9, 3),
+                    counted_days=1,
+                    reason="Unpaid day",
+                    status="APPROVED",
+                    submitted_at=datetime.now(UTC),
+                ),
+            ]
+        )
+        await session.commit()
+
+    hr = await _sign_in(client, email, password)
+    headers = {"Authorization": f"Bearer {hr['access_token']}"}
+    finalized = await client.post(f"/api/payroll/periods/{period_id}/finalize", headers=headers)
+    assert finalized.status_code == 200
+    record = next(row for row in finalized.json()["records"] if row["employee_id"] == employee_id)
+    assert record["scheduled_days"] == "4.00"
+    assert record["payable_days"] == "1.50"
+    expected = prorate_computed_salary(
+        compute_salary(Decimal("50000.00"), default_salary_structure()),
+        payable_days=Decimal("1.5"),
+        scheduled_days=Decimal("4"),
+    )
+    assert record["gross_amount"] == f"{expected.gross_amount:.2f}"
+    assert record["net_amount"] == f"{expected.net_amount:.2f}"
+    assert record["net_amount"] != "46800.00"
+    codes = {line["code"]: line["amount"] for line in record["lines"]}
+    assert codes["PT"] == "-200.00"
+    assert Decimal(codes["PF"].lstrip("-")) == Decimal(codes["BASIC"]) * Decimal("0.12")
+
+    published = await client.post(f"/api/payroll/periods/{period_id}/publish", headers=headers)
+    assert published.status_code == 200
+    published_record = next(row for row in published.json()["records"] if row["id"] == record["id"])
+    assert published_record["payable_days"] == "1.50"
+    assert published_record["scheduled_days"] == "4.00"
+    assert published_record["net_amount"] == record["net_amount"]

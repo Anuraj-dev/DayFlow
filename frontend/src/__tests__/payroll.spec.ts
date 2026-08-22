@@ -70,6 +70,8 @@ function record(overrides: Partial<PayrollRecord> = {}): PayrollRecord {
     net_amount: '51200.00',
     currency: 'INR',
     published_at: '2026-09-02T00:00:00Z',
+    scheduled_days: '22.00',
+    payable_days: '20.00',
     lines: [
       { code: 'BASIC', label: 'Basic', amount: '40000.00' },
       { code: 'HRA', label: 'House rent allowance', amount: '16000.00' },
@@ -216,6 +218,8 @@ describe('Employee payroll', () => {
     expect(wrapper.text()).toMatch(/Sep 5, 2026/)
     expect(wrapper.text()).toMatch(/Published/)
     expect(wrapper.text()).toMatch(/₹51,200\.00/)
+    expect(wrapper.text()).toMatch(/Payable days/)
+    expect(wrapper.text()).toMatch(/20\.00/)
     expect(wrapper.text()).toMatch(/Basic/)
     expect(namedButton(wrapper, 'Download payslip').exists()).toBe(true)
     expect(wrapper.text()).not.toMatch(/\bFinalize\b/)

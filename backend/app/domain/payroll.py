@@ -197,6 +197,73 @@ def assert_can_finalize(*, status: PayrollPeriodStatus, net: Decimal) -> None:
         raise PayrollError("Net pay cannot be negative.")
 
 
+def assert_no_attendance_blockers(*, open_session_count: int, pending_correction_count: int) -> None:
+    if open_session_count:
+        raise PayrollError("Open attendance sessions in this period block finalization.")
+    if pending_correction_count:
+        raise PayrollError("Pending attendance corrections in this period block finalization.")
+
+
+def prorate_computed_salary(
+    computed: ComputedSalary,
+    *,
+    payable_days: Decimal,
+    scheduled_days: Decimal,
+) -> ComputedSalary:
+    scheduled = Decimal(scheduled_days)
+    payable = Decimal(payable_days)
+    if scheduled <= 0:
+        raise PayrollError("A payroll period needs scheduled working days before it can be finalized.")
+    if payable < 0:
+        raise PayrollError("Payable days cannot be negative.")
+    factor = payable / scheduled
+    amounts: dict[str, Decimal] = {}
+    for line in computed.lines:
+        if line.kind is ComponentKind.EARNING:
+            amounts[line.code] = money(line.amount * factor)
+        elif line.code == PT_CODE:
+            amounts[line.code] = line.amount
+        else:
+            amounts[line.code] = line.amount
+
+    basic_amount = amounts.get(BASIC_CODE, Decimal("0.00"))
+    for line in computed.lines:
+        if line.kind is ComponentKind.EARNING or line.code == PT_CODE:
+            continue
+        if line.calculation_type is CalculationType.PERCENT_OF_BASIC:
+            assert line.rate is not None
+            amounts[line.code] = _percent(basic_amount, line.rate)
+        else:
+            amounts[line.code] = money(line.amount * factor)
+
+    prorated_lines = tuple(
+        ComputedSalaryLine(
+            code=line.code,
+            name=line.name,
+            kind=line.kind,
+            calculation_type=line.calculation_type,
+            rate=line.rate,
+            amount=amounts[line.code],
+            editable=line.editable,
+        )
+        for line in computed.lines
+    )
+    items = [(line.kind, line.amount) for line in prorated_lines]
+    gross, deductions, net = totals_from_components(items)
+    employer = sum(
+        (line.amount for line in prorated_lines if line.kind is ComponentKind.EMPLOYER),
+        Decimal("0.00"),
+    )
+    return ComputedSalary(
+        monthly_wage=computed.monthly_wage,
+        lines=prorated_lines,
+        gross_amount=gross,
+        deduction_amount=deductions,
+        net_amount=net,
+        employer_amount=employer,
+    )
+
+
 def assert_can_publish(status: PayrollPeriodStatus) -> None:
     if status is not PayrollPeriodStatus.FINALIZED:
         raise PayrollError("A payroll period must be finalized before it is published.")

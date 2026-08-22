@@ -85,10 +85,18 @@ class PayrollRecordDetailOut(BaseModel):
     net_amount: Decimal
     currency: str
     published_at: datetime | None = None
+    scheduled_days: Decimal | None = None
+    payable_days: Decimal | None = None
     lines: list[PayrollRecordLineOut] = []
 
     @field_serializer("gross_amount", "deduction_amount", "net_amount")
     def serialize_money(self, value: Decimal) -> str:
+        return f"{value.quantize(Decimal('0.01'))}"
+
+    @field_serializer("scheduled_days", "payable_days")
+    def serialize_days(self, value: Decimal | None) -> str | None:
+        if value is None:
+            return None
         return f"{value.quantize(Decimal('0.01'))}"
 
 
