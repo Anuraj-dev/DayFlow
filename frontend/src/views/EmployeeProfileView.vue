@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { MailIcon, MapPinIcon, PhoneIcon } from '@lucide/vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
-import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
@@ -70,6 +71,7 @@ const salaryDraftAmounts = reactive<Record<string, string>>({})
 const tab = ref('personal')
 const editing = ref(false)
 const saving = ref(false)
+const controlActionsReady = ref(false)
 const draft = reactive<Draft>({
   first_name: '',
   last_name: '',
@@ -115,6 +117,10 @@ const displayName = computed(() =>
   person.value ? `${person.value.first_name} ${person.value.last_name}` : 'Profile',
 )
 
+const pageHeading = computed(() =>
+  errorTitle.value === 'Access denied' ? 'Access denied' : displayName.value,
+)
+
 function calculationLabel(type: string): string {
   if (type === 'PERCENT_OF_WAGE') return '% of wage'
   if (type === 'PERCENT_OF_BASIC') return '% of Basic'
@@ -138,6 +144,21 @@ function applySalaryDraft(row: EmployeeSalary) {
     else if (line.rate != null) salaryDraftRates[line.code] = line.rate
   }
 }
+
+const useIdentityColumn = computed(() => !session.isHr)
+
+const profileInitials = computed(() => {
+  if (!person.value) return ''
+  const first = person.value.first_name.trim().charAt(0)
+  const last = person.value.last_name.trim().charAt(0)
+  return `${first}${last}`.toUpperCase() || person.value.employee_code.slice(0, 2).toUpperCase()
+})
+
+const roleLabel = computed(() => {
+  if (person.value?.role === 'HR') return 'HR'
+  if (person.value?.role === 'EMPLOYEE') return 'Employee'
+  return person.value?.role ?? null
+})
 
 function canEdit(field: keyof Draft): boolean {
   return editing.value && allowedFields.value.has(field)
@@ -256,6 +277,11 @@ function cancelEdit() {
   saveStatus.value = ''
 }
 
+onMounted(async () => {
+  await nextTick()
+  controlActionsReady.value = Boolean(document.getElementById('control-actions'))
+})
+
 watch(
   () => route.params.employeeId,
   () => {
@@ -266,185 +292,304 @@ watch(
 </script>
 
 <template>
-  <section class="sheet">
-    <PageHeader
-      :title="errorTitle === 'Access denied' ? 'Access denied' : displayName"
-      :description="person ? 'Personal, job, salary, and documents.' : undefined"
-    >
-      <template v-if="person">
+  <section class="sheet employee-profile">
+    <Teleport v-if="controlActionsReady && person" defer to="#control-actions">
+      <div class="flex flex-wrap items-center gap-2">
         <StatusBadge
           v-if="dirty"
           label="Unsaved changes"
           :tone="statusTone('Unsaved changes')"
         />
-        <Button v-if="!editing" type="button" variant="outline" @click="startEdit">Edit</Button>
+        <Button v-if="!editing" type="button" @click="startEdit">Edit</Button>
         <Button v-if="editing" type="button" variant="secondary" @click="cancelEdit">Discard</Button>
         <Button v-if="editing" type="button" :disabled="!dirty || saving" @click="save">Save</Button>
-      </template>
-    </PageHeader>
+      </div>
+    </Teleport>
+
     <p v-if="loading">Loading profile…</p>
     <Alert v-else-if="error" variant="destructive">
       <AlertTitle>{{ errorTitle || 'Error' }}</AlertTitle>
       <AlertDescription>{{ error }}</AlertDescription>
+      <h1 class="sr-only">{{ pageHeading }}</h1>
     </Alert>
+
     <form v-else-if="person" class="grid gap-4" @submit.prevent="save">
+      <div
+        v-if="!controlActionsReady"
+        class="flex flex-wrap items-center justify-end gap-2 border-b border-[#DEE2E6] pb-3"
+      >
+        <StatusBadge
+          v-if="dirty"
+          label="Unsaved changes"
+          :tone="statusTone('Unsaved changes')"
+        />
+        <Button v-if="!editing" type="button" @click="startEdit">Edit</Button>
+        <Button v-if="editing" type="button" variant="secondary" @click="cancelEdit">Discard</Button>
+        <Button v-if="editing" type="button" :disabled="!dirty || saving" @click="save">Save</Button>
+      </div>
+
       <p v-if="saveError" role="alert">{{ saveError }}</p>
       <p v-if="saveStatus" class="feedback-success" role="status">{{ saveStatus }}</p>
-      <Tabs v-model="tab">
-        <TabsList class="h-auto w-full justify-start overflow-x-auto">
-          <TabsTrigger value="personal" @click="tab = 'personal'">Personal</TabsTrigger>
-          <TabsTrigger value="job" @click="tab = 'job'">Job</TabsTrigger>
-          <TabsTrigger value="salary" @click="tab = 'salary'">Salary</TabsTrigger>
-          <TabsTrigger value="documents" @click="tab = 'documents'">Documents</TabsTrigger>
-        </TabsList>
-        <TabsContent value="personal" class="grid max-w-xl gap-[5px] pt-4">
-          <label class="grid gap-1 text-sm font-medium">
-            Employee code
-            <Input :model-value="person.employee_code" disabled />
-          </label>
-          <label class="grid gap-1 text-sm font-medium">
-            First name
-            <Input v-model="draft.first_name" :disabled="!canEdit('first_name')" />
-          </label>
-          <label class="grid gap-1 text-sm font-medium">
-            Last name
-            <Input v-model="draft.last_name" :disabled="!canEdit('last_name')" />
-          </label>
-          <label class="grid gap-1 text-sm font-medium">
-            Work email
-            <Input :model-value="person.email ?? 'Not provided'" type="email" disabled />
-          </label>
-          <label class="grid gap-1 text-sm font-medium">
-            Phone
-            <Input v-model="draft.phone" :disabled="!canEdit('phone')" />
-          </label>
-          <label class="grid gap-1 text-sm font-medium">
-            Address
-            <Textarea v-model="draft.address" :disabled="!canEdit('address')" />
-          </label>
-          <label class="grid gap-1 text-sm font-medium">
-            Employment status
-            <NativeSelect v-model="draft.status" class="w-full" :disabled="!canEdit('status')">
-              <NativeSelectOption value="ACTIVE">Active</NativeSelectOption>
-              <NativeSelectOption value="INVITED">Invited</NativeSelectOption>
-              <NativeSelectOption value="INACTIVE">Inactive</NativeSelectOption>
-            </NativeSelect>
-          </label>
-          <p class="text-sm text-[#495057]">
-            Status
+
+      <!-- HR: identity header strip -->
+      <header
+        v-if="!useIdentityColumn"
+        class="identity-header flex flex-wrap items-start gap-4 border-b border-[#DEE2E6] pb-4"
+      >
+        <Avatar size="lg" class="size-16 bg-[#F8F9FA] text-base font-medium text-[#495057]">
+          <AvatarFallback>{{ profileInitials }}</AvatarFallback>
+        </Avatar>
+        <div class="min-w-0 flex-1">
+          <h1 class="m-0 text-[24px] leading-[1.4] font-bold text-[#212529] sm:text-[28px]">
+            {{ displayName }}
+          </h1>
+          <p class="m-0 mt-1 text-sm text-[#495057]">
+            {{ person.employee_code }}
+            <span v-if="roleLabel"> · {{ roleLabel }}</span>
+            <span v-if="person.title"> · {{ person.title }}</span>
+          </p>
+          <div class="mt-2 flex flex-wrap items-center gap-2">
             <StatusBadge
               :label="employeeStatusLabel(draft.status)"
               :tone="statusTone(employeeStatusLabel(draft.status))"
             />
-          </p>
-        </TabsContent>
-        <TabsContent value="job" class="grid max-w-xl gap-[5px] pt-4">
-          <label class="grid gap-1 text-sm font-medium">
-            Title
-            <Input v-model="draft.title" :disabled="!canEdit('title')" />
-          </label>
-          <label class="grid gap-1 text-sm font-medium">
-            Department
-            <Input v-model="draft.department" :disabled="!canEdit('department')" />
-          </label>
-          <label class="grid gap-1 text-sm font-medium">
-            Employment type
-            <Input
-              v-if="canEdit('employment_type')"
-              v-model="draft.employment_type"
+          </div>
+          <ul class="identity-facts mt-3 grid gap-1.5 text-sm text-[#495057]">
+            <li v-if="person.email" class="flex items-center gap-2">
+              <MailIcon class="size-4 shrink-0" :stroke-width="1.75" aria-hidden="true" />
+              <span>{{ person.email }}</span>
+            </li>
+            <li v-if="draft.phone" class="flex items-center gap-2">
+              <PhoneIcon class="size-4 shrink-0" :stroke-width="1.75" aria-hidden="true" />
+              <span>{{ draft.phone }}</span>
+            </li>
+            <li v-if="draft.location || draft.address" class="flex items-center gap-2">
+              <MapPinIcon class="size-4 shrink-0" :stroke-width="1.75" aria-hidden="true" />
+              <span>{{ draft.location || draft.address }}</span>
+            </li>
+          </ul>
+        </div>
+      </header>
+
+      <div
+        class="profile-body"
+        :class="useIdentityColumn ? 'profile-body--column' : 'profile-body--header'"
+      >
+        <!-- Employee: identity side column -->
+        <aside v-if="useIdentityColumn" class="identity-column">
+          <Avatar size="lg" class="size-20 bg-[#F8F9FA] text-lg font-medium text-[#495057]">
+            <AvatarFallback>{{ profileInitials }}</AvatarFallback>
+          </Avatar>
+          <h1 class="m-0 mt-3 text-[21px] leading-[1.4] font-bold text-[#212529]">
+            {{ displayName }}
+          </h1>
+          <p class="m-0 mt-1 text-sm text-[#495057]">{{ person.employee_code }}</p>
+          <div class="mt-2">
+            <StatusBadge
+              :label="employeeStatusLabel(draft.status)"
+              :tone="statusTone(employeeStatusLabel(draft.status))"
             />
-            <Input v-else :model-value="formatEnumLabel(draft.employment_type)" disabled />
-          </label>
-          <label class="grid gap-1 text-sm font-medium">
-            Location
-            <Input v-model="draft.location" :disabled="!canEdit('location')" />
-          </label>
-          <label class="grid gap-1 text-sm font-medium">
-            Joined on
-            <Input :model-value="formatDate(person.joined_on)" disabled />
-          </label>
-        </TabsContent>
-        <TabsContent value="salary" class="grid gap-3 pt-4">
-          <p v-if="salaryError" role="alert">{{ salaryError }}</p>
-          <p v-if="salaryStatus" class="feedback-success" role="status">{{ salaryStatus }}</p>
-          <p v-if="salaryHidden">Salary is hidden.</p>
-          <template v-else-if="salary || (session.isHr && salaryMissing)">
-            <p class="m-0 text-[#495057]">
-              {{
-                session.isHr
-                  ? 'HR sets monthly wage and editable rates. Remainder, PF, and professional tax are computed.'
-                  : 'Computed monthly breakdown. Coworker salary stays hidden.'
-              }}
-            </p>
-            <label class="grid max-w-xs gap-1 text-sm font-medium">
-              Monthly wage
-              <Input
-                v-model="salaryDraftWage"
-                inputmode="decimal"
-                :disabled="!session.isHr"
-              />
-            </label>
-            <p v-if="salary" class="m-0">
-              Net {{ formatCurrency(salary.currency, salary.net_amount) }}
-              <StatusBadge label="Computed" :tone="statusTone('Computed')" />
-            </p>
-            <Table v-if="salary">
-              <TableCaption class="sr-only">Salary structure</TableCaption>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Component</TableHead>
-                  <TableHead>Basis</TableHead>
-                  <TableHead>Input</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <TableRow v-for="line in salary.lines" :key="line.code">
-                  <TableCell>{{ line.name }}</TableCell>
-                  <TableCell>{{ calculationLabel(line.calculation_type) }}</TableCell>
-                  <TableCell>
-                    <label
-                      v-if="session.isHr && line.editable && line.calculation_type === 'FIXED'"
-                      class="grid gap-1 text-sm font-medium"
-                    >
-                      {{ line.code }} amount
-                      <Input v-model="salaryDraftAmounts[line.code]" inputmode="decimal" />
-                    </label>
-                    <label
-                      v-else-if="session.isHr && line.editable"
-                      class="grid gap-1 text-sm font-medium"
-                    >
-                      {{ line.code }} rate
-                      <Input v-model="salaryDraftRates[line.code]" inputmode="decimal" />
-                    </label>
-                    <span v-else>{{ line.rate ?? '—' }}</span>
-                  </TableCell>
-                  <TableCell>{{ formatCurrency(salary.currency, line.amount) }}</TableCell>
-                  <TableCell>
-                    <StatusBadge :label="lineStatus(line)" :tone="statusTone(lineStatus(line))" />
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-            <Button
-              v-if="session.isHr"
-              type="button"
-              :disabled="savingSalary"
-              @click="saveSalary"
-            >
-              Save salary
-            </Button>
-          </template>
-          <p v-else>No salary configured.</p>
-        </TabsContent>
-        <TabsContent value="documents" class="grid gap-3 pt-4">
-          <StatusBadge label="Missing document" :tone="statusTone('Missing document')" />
-          <p>
-            Document uploads are not available yet. HR and employees will access private documents here when enabled.
-          </p>
-        </TabsContent>
-      </Tabs>
+          </div>
+          <ul class="identity-facts mt-4 grid gap-2 text-sm text-[#495057]">
+            <li v-if="person.email" class="flex items-start gap-2">
+              <MailIcon class="mt-0.5 size-4 shrink-0" :stroke-width="1.75" aria-hidden="true" />
+              <span class="min-w-0 break-words">{{ person.email }}</span>
+            </li>
+            <li v-if="draft.phone" class="flex items-start gap-2">
+              <PhoneIcon class="mt-0.5 size-4 shrink-0" :stroke-width="1.75" aria-hidden="true" />
+              <span class="min-w-0 break-words">{{ draft.phone }}</span>
+            </li>
+            <li v-if="draft.location || draft.address" class="flex items-start gap-2">
+              <MapPinIcon class="mt-0.5 size-4 shrink-0" :stroke-width="1.75" aria-hidden="true" />
+              <span class="min-w-0 break-words">{{ draft.location || draft.address }}</span>
+            </li>
+          </ul>
+        </aside>
+
+        <div class="profile-tabs min-w-0">
+          <Tabs v-model="tab">
+            <TabsList class="h-auto w-full justify-start overflow-x-auto">
+              <TabsTrigger value="personal" @click="tab = 'personal'">Personal</TabsTrigger>
+              <TabsTrigger value="job" @click="tab = 'job'">Job</TabsTrigger>
+              <TabsTrigger value="salary" @click="tab = 'salary'">Salary</TabsTrigger>
+              <TabsTrigger value="documents" @click="tab = 'documents'">Documents</TabsTrigger>
+            </TabsList>
+            <TabsContent value="personal" class="grid max-w-xl gap-[5px] pt-4">
+              <label class="grid gap-1 text-sm font-medium">
+                Employee code
+                <Input :model-value="person.employee_code" disabled />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                First name
+                <Input v-model="draft.first_name" :disabled="!canEdit('first_name')" />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Last name
+                <Input v-model="draft.last_name" :disabled="!canEdit('last_name')" />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Work email
+                <Input :model-value="person.email ?? 'Not provided'" type="email" disabled />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Phone
+                <Input v-model="draft.phone" :disabled="!canEdit('phone')" />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Address
+                <Textarea v-model="draft.address" :disabled="!canEdit('address')" />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Employment status
+                <NativeSelect v-model="draft.status" class="w-full" :disabled="!canEdit('status')">
+                  <NativeSelectOption value="ACTIVE">Active</NativeSelectOption>
+                  <NativeSelectOption value="INVITED">Invited</NativeSelectOption>
+                  <NativeSelectOption value="INACTIVE">Inactive</NativeSelectOption>
+                </NativeSelect>
+              </label>
+              <p class="text-sm text-[#495057]">
+                Status
+                <StatusBadge
+                  :label="employeeStatusLabel(draft.status)"
+                  :tone="statusTone(employeeStatusLabel(draft.status))"
+                />
+              </p>
+            </TabsContent>
+            <TabsContent value="job" class="grid max-w-xl gap-[5px] pt-4">
+              <label class="grid gap-1 text-sm font-medium">
+                Title
+                <Input v-model="draft.title" :disabled="!canEdit('title')" />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Department
+                <Input v-model="draft.department" :disabled="!canEdit('department')" />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Employment type
+                <Input
+                  v-if="canEdit('employment_type')"
+                  v-model="draft.employment_type"
+                />
+                <Input v-else :model-value="formatEnumLabel(draft.employment_type)" disabled />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Location
+                <Input v-model="draft.location" :disabled="!canEdit('location')" />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Joined on
+                <Input :model-value="formatDate(person.joined_on)" disabled />
+              </label>
+            </TabsContent>
+            <TabsContent value="salary" class="grid gap-3 pt-4">
+              <p v-if="salaryError" role="alert">{{ salaryError }}</p>
+              <p v-if="salaryStatus" class="feedback-success" role="status">{{ salaryStatus }}</p>
+              <p v-if="salaryHidden">Salary is hidden.</p>
+              <template v-else-if="salary || (session.isHr && salaryMissing)">
+                <p class="m-0 text-[#495057]">
+                  {{
+                    session.isHr
+                      ? 'HR sets monthly wage and editable rates. Remainder, PF, and professional tax are computed.'
+                      : 'Computed monthly breakdown. Coworker salary stays hidden.'
+                  }}
+                </p>
+                <label class="grid max-w-xs gap-1 text-sm font-medium">
+                  Monthly wage
+                  <Input v-model="salaryDraftWage" inputmode="decimal" :disabled="!session.isHr" />
+                </label>
+                <p v-if="salary" class="m-0">
+                  Net {{ formatCurrency(salary.currency, salary.net_amount) }}
+                  <StatusBadge label="Computed" :tone="statusTone('Computed')" />
+                </p>
+                <Table v-if="salary">
+                  <TableCaption class="sr-only">Salary structure</TableCaption>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Component</TableHead>
+                      <TableHead>Basis</TableHead>
+                      <TableHead>Input</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    <TableRow v-for="line in salary.lines" :key="line.code">
+                      <TableCell>{{ line.name }}</TableCell>
+                      <TableCell>{{ calculationLabel(line.calculation_type) }}</TableCell>
+                      <TableCell>
+                        <label
+                          v-if="session.isHr && line.editable && line.calculation_type === 'FIXED'"
+                          class="grid gap-1 text-sm font-medium"
+                        >
+                          {{ line.code }} amount
+                          <Input v-model="salaryDraftAmounts[line.code]" inputmode="decimal" />
+                        </label>
+                        <label
+                          v-else-if="session.isHr && line.editable"
+                          class="grid gap-1 text-sm font-medium"
+                        >
+                          {{ line.code }} rate
+                          <Input v-model="salaryDraftRates[line.code]" inputmode="decimal" />
+                        </label>
+                        <span v-else>{{ line.rate ?? '—' }}</span>
+                      </TableCell>
+                      <TableCell>{{ formatCurrency(salary.currency, line.amount) }}</TableCell>
+                      <TableCell>
+                        <StatusBadge :label="lineStatus(line)" :tone="statusTone(lineStatus(line))" />
+                      </TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+                <Button v-if="session.isHr" type="button" :disabled="savingSalary" @click="saveSalary">
+                  Save salary
+                </Button>
+              </template>
+              <p v-else>No salary configured.</p>
+            </TabsContent>
+            <TabsContent value="documents" class="grid gap-3 pt-4">
+              <StatusBadge label="Missing document" :tone="statusTone('Missing document')" />
+              <p>
+                Document uploads are not available yet. HR and employees will access private documents here when enabled.
+              </p>
+            </TabsContent>
+          </Tabs>
+        </div>
+      </div>
     </form>
   </section>
 </template>
+
+<style scoped>
+.profile-body--column {
+  display: grid;
+  gap: 1.5rem;
+}
+
+@media (min-width: 768px) {
+  .profile-body--column {
+    grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+.identity-column {
+  min-width: 0;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #dee2e6;
+}
+
+@media (min-width: 768px) {
+  .identity-column {
+    border-bottom: none;
+    border-right: 1px solid #dee2e6;
+    padding-bottom: 0;
+    padding-right: 1.5rem;
+  }
+}
+
+.identity-facts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+</style>

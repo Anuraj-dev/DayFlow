@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import {
   BanknoteIcon,
-  CalendarDaysIcon,
   Clock3Icon,
   LayoutDashboardIcon,
   MenuIcon,
+  PlaneIcon,
   SettingsIcon,
   UsersRoundIcon,
   XIcon,
@@ -27,7 +27,7 @@ const nav = computed(() => {
   const items = [
     { to: '/dashboard', label: 'Overview', icon: LayoutDashboardIcon },
     { to: '/attendance', label: 'Attendance', icon: Clock3Icon },
-    { to: '/time-off', label: 'Time off', icon: CalendarDaysIcon },
+    { to: '/time-off', label: 'Time off', icon: PlaneIcon },
     { to: '/payroll', label: 'Payroll', icon: BanknoteIcon },
   ]
   if (session.isHr) {
@@ -95,7 +95,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex min-h-screen flex-col bg-background">
+  <div class="flex min-h-screen flex-col bg-[#F8F9FA]">
     <a
       class="skip sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-3 focus:z-50 focus:bg-white focus:px-3 focus:py-1"
       href="#main"
@@ -104,20 +104,22 @@ onUnmounted(() => {
     </a>
     <header
       data-slot="app-navbar"
-      class="flex h-[46px] w-full items-stretch border-b border-black/20 bg-primary text-white/90"
+      class="flex h-[46px] w-full items-stretch border-b border-black/20 bg-[#714B67] text-white/90"
     >
-      <div class="flex items-center px-4 font-bold tracking-wide">Dayflow</div>
+      <div class="flex items-center px-4 text-[14px] font-bold tracking-wide text-white">
+        Dayflow
+      </div>
       <nav aria-label="Product areas" class="hidden min-w-0 flex-1 items-stretch sm:flex">
         <RouterLink
           v-for="item in nav"
           :key="item.to"
           :to="item.to"
-          class="relative flex items-center px-3 text-white/90 no-underline hover:bg-black/8"
+          class="relative flex items-center gap-2 px-3 text-[14px] text-white/90 no-underline hover:bg-black/8"
           active-class="bg-black/12 text-white after:absolute after:right-3 after:bottom-0 after:left-3 after:h-0.5 after:bg-white"
         >
           <component
             :is="item.icon"
-            class="mr-2 size-4 shrink-0"
+            class="size-4 shrink-0"
             :stroke-width="1.75"
             aria-hidden="true"
           />
@@ -163,11 +165,11 @@ onUnmounted(() => {
         <XIcon v-if="mobileNavOpen" class="size-5" aria-hidden="true" />
         <MenuIcon v-else class="size-5" aria-hidden="true" />
       </button>
-      <div ref="menuWrap" class="relative hidden items-center pr-3 sm:flex">
+      <div ref="menuWrap" class="relative hidden items-center pr-2 sm:flex">
         <button
           ref="accountButton"
           type="button"
-          class="h-full px-3 text-white/90 hover:bg-black/8"
+          class="h-full px-3 text-[14px] text-white/90 hover:bg-black/8"
           aria-haspopup="menu"
           aria-controls="account-menu"
           :aria-expanded="menuOpen"
@@ -178,12 +180,12 @@ onUnmounted(() => {
         <div
           v-if="menuOpen"
           id="account-menu"
-          class="absolute top-full right-2 z-20 min-w-40 border border-border bg-white text-foreground shadow-none"
+          class="absolute top-full right-2 z-20 min-w-40 rounded-[3px] border border-[#DEE2E6] bg-white text-[#212529] shadow-none"
           role="menu"
         >
           <RouterLink
             role="menuitem"
-            class="block px-3 py-2 no-underline hover:bg-muted"
+            class="block px-3 py-2 text-[14px] no-underline hover:bg-[#F1F3F5]"
             :to="profilePath"
             @click="closeAccountMenu()"
           >
@@ -192,7 +194,7 @@ onUnmounted(() => {
           <button
             type="button"
             role="menuitem"
-            class="block w-full px-3 py-2 text-left hover:bg-muted"
+            class="block w-full px-3 py-2 text-left text-[14px] hover:bg-[#F1F3F5]"
             @click="signOut"
           >
             Log out
@@ -204,7 +206,7 @@ onUnmounted(() => {
       v-if="mobileNavOpen"
       id="mobile-product-nav"
       aria-label="Mobile product areas"
-      class="border-b border-black/20 bg-primary text-white sm:hidden"
+      class="border-b border-black/20 bg-[#714B67] text-white sm:hidden"
     >
       <div
         v-if="attendance.visible"
@@ -237,13 +239,13 @@ onUnmounted(() => {
         v-for="item in nav"
         :key="item.to"
         :to="item.to"
-        class="flex min-h-[44px] items-center border-t border-white/10 px-4 no-underline"
+        class="flex min-h-[44px] items-center gap-3 border-t border-white/10 px-4 text-[14px] no-underline"
         active-class="bg-black/12 font-medium"
         @click="closeMobileNav"
       >
         <component
           :is="item.icon"
-          class="mr-3 size-4 shrink-0"
+          class="size-4 shrink-0"
           :stroke-width="1.75"
           aria-hidden="true"
         />
@@ -251,14 +253,14 @@ onUnmounted(() => {
       </RouterLink>
       <RouterLink
         :to="profilePath"
-        class="flex min-h-[44px] items-center border-t border-white/10 px-4 no-underline"
+        class="flex min-h-[44px] items-center border-t border-white/10 px-4 text-[14px] no-underline"
         @click="closeMobileNav"
       >
         My profile
       </RouterLink>
       <button
         type="button"
-        class="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 text-left"
+        class="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 text-left text-[14px]"
         @click="signOut"
       >
         Log out
@@ -274,14 +276,14 @@ onUnmounted(() => {
     </p>
     <div
       data-slot="control-panel"
-      class="flex min-w-0 flex-wrap items-center gap-3 border-b border-[#DEE2E6] bg-white px-4 py-2 has-[#control-actions:empty]:hidden"
+      class="control-panel flex min-w-0 flex-wrap items-center gap-2 border-b border-[#DEE2E6] bg-white px-4 py-2 has-[#control-actions:empty]:hidden"
     >
       <div
         id="control-actions"
-        class="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto"
+        class="flex w-full min-w-0 flex-wrap items-center gap-2 sm:ml-auto sm:w-auto"
       />
     </div>
-    <main id="main" class="min-w-0 flex-1 bg-[#F8F9FA] p-3 sm:p-4">
+    <main id="main" class="min-w-0 flex-1 bg-[#F8F9FA] p-4">
       <RouterView />
     </main>
   </div>

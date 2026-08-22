@@ -3,7 +3,7 @@ import {
   BanIcon,
   BriefcaseBusinessIcon,
   CalendarDaysIcon,
-  CheckCircle2Icon,
+  CircleCheckIcon,
   Clock3Icon,
   HeartPulseIcon,
 } from '@lucide/vue'
@@ -175,7 +175,7 @@ function dashboardLeaveLabel(leaveType: string) {
         <AlertTitle>Incomplete profile</AlertTitle>
         <AlertDescription>
           Add missing personal details on
-          <RouterLink class="underline" :to="profilePath">My profile</RouterLink>
+          <RouterLink class="text-[#017E84] underline" :to="profilePath">My profile</RouterLink>
           before the next payroll cut-off.
         </AlertDescription>
       </Alert>
@@ -188,7 +188,7 @@ function dashboardLeaveLabel(leaveType: string) {
               <h2 id="attendance-heading">Attendance</h2>
             </div>
             <div class="attendance-status" :data-tone="attendanceTone" role="status">
-              <CheckCircle2Icon
+              <CircleCheckIcon
                 v-if="attendanceTone === 'confirmed'"
                 class="size-5"
                 :stroke-width="2.25"
@@ -303,7 +303,7 @@ function dashboardLeaveLabel(leaveType: string) {
 
       <div class="current-attendance">
         <div class="current-attendance-status" :data-tone="attendanceTone">
-          <CheckCircle2Icon
+          <CircleCheckIcon
             v-if="attendanceTone === 'confirmed'"
             class="size-5"
             :stroke-width="2.25"
@@ -410,19 +410,18 @@ function dashboardLeaveLabel(leaveType: string) {
 .dashboard-sheet {
   margin-inline: auto;
   max-width: 1400px;
-  padding: 28px 40px 32px;
 }
 
 .employee-dashboard {
   display: grid;
-  gap: 24px;
+  gap: 1.5rem;
 }
 
 .dashboard-columns {
   display: grid;
   grid-template-columns: minmax(280px, 0.9fr) minmax(420px, 1.6fr);
   gap: 0;
-  margin-top: 28px;
+  margin-top: 0.5rem;
 }
 
 .attendance-summary,
@@ -638,10 +637,6 @@ function dashboardLeaveLabel(leaveType: string) {
 }
 
 @media (max-width: 767px) {
-  .dashboard-sheet {
-    padding: 24px 16px;
-  }
-
   .dashboard-columns {
     grid-template-columns: minmax(0, 1fr);
     gap: 32px;

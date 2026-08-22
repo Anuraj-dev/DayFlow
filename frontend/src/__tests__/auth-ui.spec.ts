@@ -197,6 +197,7 @@ describe('ActivateAccountView', () => {
     await inputByLabel(wrapper, 'Work email').setValue('new.hire@dayflow.demo')
     await inputByLabel(wrapper, 'Invite token').setValue('invite-token-1')
     await inputByLabel(wrapper, 'New password').setValue('ChangeMe_Emp12!')
+    await inputByLabel(wrapper, 'Confirm password').setValue('ChangeMe_Emp12!')
   }
 
   it('renders the valid invite form', async () => {

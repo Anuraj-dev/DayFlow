@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import EmptyState from '@/components/EmptyState.vue'
-import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -44,6 +44,7 @@ const hiring = ref(false)
 const hireError = ref('')
 const inviteToken = ref('')
 const inviteCode = ref('')
+const controlActionsReady = ref(false)
 const hire = reactive({
   first_name: '',
   last_name: '',
@@ -76,6 +77,18 @@ const pagedEmployees = computed(() => {
 const rangeStart = computed(() => (visible.value.length ? (page.value - 1) * PAGE_SIZE + 1 : 0))
 const rangeEnd = computed(() => Math.min(page.value * PAGE_SIZE, visible.value.length))
 
+function initials(row: EmployeeSummary): string {
+  const first = row.first_name.trim().charAt(0)
+  const last = row.last_name.trim().charAt(0)
+  return `${first}${last}`.toUpperCase() || row.employee_code.slice(0, 2).toUpperCase()
+}
+
+function roleLabel(role: string | null | undefined): string {
+  if (role === 'HR') return 'HR'
+  if (role === 'EMPLOYEE') return 'Employee'
+  return role ?? '—'
+}
+
 function clearFilters() {
   query.value = ''
   statusFilter.value = 'all'
@@ -91,6 +104,8 @@ async function loadPeople() {
 }
 
 onMounted(async () => {
+  await nextTick()
+  controlActionsReady.value = Boolean(document.getElementById('control-actions'))
   try {
     await loadPeople()
   } catch (err) {
@@ -144,14 +159,41 @@ async function submitHire() {
 </script>
 
 <template>
-  <section class="sheet">
-    <PageHeader title="People" description="Find, activate, and open employee records.">
-      <Button v-if="session.isHr" type="button" @click="openHire">New</Button>
-    </PageHeader>
-    <div class="mb-3 flex flex-wrap gap-3">
+  <section class="sheet people-directory">
+    <Teleport v-if="controlActionsReady" defer to="#control-actions">
+      <div class="flex w-full min-w-0 flex-wrap items-center gap-2">
+        <label class="grid min-w-48 flex-1 gap-1 text-sm font-medium sm:max-w-xs">
+          Filter people
+          <Input v-model="query" type="search" placeholder="Search name, code, or department" />
+        </label>
+        <label class="grid w-36 gap-1 text-sm font-medium">
+          Status
+          <NativeSelect v-model="statusFilter" class="w-full">
+            <NativeSelectOption value="all">All</NativeSelectOption>
+            <NativeSelectOption value="ACTIVE">Active</NativeSelectOption>
+            <NativeSelectOption value="INVITED">Invited</NativeSelectOption>
+            <NativeSelectOption value="INACTIVE">Inactive</NativeSelectOption>
+          </NativeSelect>
+        </label>
+        <label class="grid w-40 gap-1 text-sm font-medium">
+          Sort by
+          <NativeSelect v-model="sortBy" class="w-full">
+            <NativeSelectOption value="name">Name</NativeSelectOption>
+            <NativeSelectOption value="code">Employee code</NativeSelectOption>
+            <NativeSelectOption value="department">Department</NativeSelectOption>
+          </NativeSelect>
+        </label>
+        <Button v-if="session.isHr" type="button" class="sm:ml-auto" @click="openHire">New</Button>
+      </div>
+    </Teleport>
+
+    <div
+      v-if="!controlActionsReady"
+      class="mb-3 flex flex-wrap items-end gap-3 border-b border-[#DEE2E6] pb-3"
+    >
       <label class="grid max-w-xs min-w-48 flex-1 gap-1 text-sm font-medium">
         Filter people
-        <Input v-model="query" type="search" />
+        <Input v-model="query" type="search" placeholder="Search name, code, or department" />
       </label>
       <label class="grid w-40 gap-1 text-sm font-medium">
         Status
@@ -170,7 +212,9 @@ async function submitHire() {
           <NativeSelectOption value="department">Department</NativeSelectOption>
         </NativeSelect>
       </label>
+      <Button v-if="session.isHr" type="button" class="ml-auto" @click="openHire">New</Button>
     </div>
+
     <p v-if="loading">Loading people…</p>
     <p v-else-if="error" role="alert">{{ error }}</p>
     <EmptyState
@@ -194,49 +238,58 @@ async function submitHire() {
         </div>
       </div>
       <Table>
-      <TableCaption class="sr-only">Employee directory</TableCaption>
-      <TableHeader class="sticky top-0 bg-white">
-        <TableRow>
-          <TableHead>Code</TableHead>
-          <TableHead>Name</TableHead>
-          <TableHead>Title</TableHead>
-          <TableHead>Department</TableHead>
-          <TableHead>Role</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead>Attendance</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        <TableRow v-for="person in pagedEmployees" :key="person.id">
-          <TableCell>
-            <RouterLink class="text-[#017E84] underline" :to="`/employees/${person.id}`">
-              {{ person.employee_code }}
-            </RouterLink>
-          </TableCell>
-          <TableCell>
-            <RouterLink class="font-medium text-[#017E84] underline" :to="`/employees/${person.id}`">
-              {{ person.first_name }} {{ person.last_name }}
-            </RouterLink>
-          </TableCell>
-          <TableCell>{{ person.title ?? '—' }}</TableCell>
-          <TableCell>{{ person.department ?? '—' }}</TableCell>
-          <TableCell>{{ person.role ?? '—' }}</TableCell>
-          <TableCell>
-            <StatusBadge
-              :label="employeeStatusLabel(person.status)"
-              :tone="statusTone(employeeStatusLabel(person.status))"
-            />
-          </TableCell>
-          <TableCell>
-            <StatusBadge
-              :label="presenceLabel(person.presence)"
-              :tone="statusTone(presenceLabel(person.presence))"
-            />
-          </TableCell>
-        </TableRow>
-      </TableBody>
+        <TableCaption class="sr-only">Employee directory</TableCaption>
+        <TableHeader class="sticky top-0 bg-white">
+          <TableRow>
+            <TableHead>Name</TableHead>
+            <TableHead>Code</TableHead>
+            <TableHead>Title</TableHead>
+            <TableHead>Department</TableHead>
+            <TableHead>Role</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead>Attendance</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableRow v-for="person in pagedEmployees" :key="person.id">
+            <TableCell>
+              <div class="flex min-w-0 items-center gap-2">
+                <Avatar size="sm" class="bg-[#F8F9FA] text-[11px] font-medium text-[#495057]">
+                  <AvatarFallback>{{ initials(person) }}</AvatarFallback>
+                </Avatar>
+                <RouterLink
+                  class="truncate font-medium text-[#017E84] underline"
+                  :to="`/employees/${person.id}`"
+                >
+                  {{ person.first_name }} {{ person.last_name }}
+                </RouterLink>
+              </div>
+            </TableCell>
+            <TableCell>
+              <RouterLink class="text-[#017E84] underline" :to="`/employees/${person.id}`">
+                {{ person.employee_code }}
+              </RouterLink>
+            </TableCell>
+            <TableCell>{{ person.title ?? '—' }}</TableCell>
+            <TableCell>{{ person.department ?? '—' }}</TableCell>
+            <TableCell>{{ roleLabel(person.role) }}</TableCell>
+            <TableCell>
+              <StatusBadge
+                :label="employeeStatusLabel(person.status)"
+                :tone="statusTone(employeeStatusLabel(person.status))"
+              />
+            </TableCell>
+            <TableCell>
+              <StatusBadge
+                :label="presenceLabel(person.presence)"
+                :tone="statusTone(presenceLabel(person.presence))"
+              />
+            </TableCell>
+          </TableRow>
+        </TableBody>
       </Table>
     </template>
+
     <Dialog :open="hireOpen" @update:open="hireOpen = $event">
       <DialogContent>
         <DialogHeader>
@@ -282,3 +335,9 @@ async function submitHire() {
     </Dialog>
   </section>
 </template>
+
+<style scoped>
+.people-directory {
+  max-width: none;
+}
+</style>

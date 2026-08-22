@@ -227,6 +227,14 @@ button {
     max-width: 28rem;
   }
 
+  .control-panel {
+    min-height: var(--control-panel-min-height);
+  }
+
+  .control-panel :where(button, a, input, select) {
+    font-size: 14px;
+  }
+
   .feedback-success,
   .feedback-error {
     margin: 0 0 1rem;
