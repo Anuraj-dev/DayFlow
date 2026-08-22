@@ -225,17 +225,6 @@ function clearExceptionFilters() {
   kindFilter.value = 'all'
 }
 
-async function punch(path: '/api/attendance/check-in' | '/api/attendance/check-out') {
-  actionError.value = ''
-  actionStatus.value = ''
-  try {
-    await attendance.punch(path)
-    actionStatus.value = path.endsWith('check-in') ? 'Checked in successfully.' : 'Checked out successfully.'
-  } catch (err) {
-    actionError.value = err instanceof HttpError ? err.detail : 'Attendance action failed.'
-  }
-}
-
 function openCorrection(sessionId?: string) {
   actionError.value = ''
   actionStatus.value = ''
@@ -325,17 +314,6 @@ async function reviewCorrection(decision: 'APPROVED' | 'REJECTED') {
   <section class="sheet attendance-sheet">
     <Teleport v-if="controlActionsReady && !session.isHr" defer to="#control-actions">
       <div class="flex flex-wrap items-center gap-2">
-        <Button type="button" :disabled="loading || Boolean(data?.open_session)" @click="punch('/api/attendance/check-in')">
-          Check in
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          :disabled="loading || !data?.open_session"
-          @click="punch('/api/attendance/check-out')"
-        >
-          Check out
-        </Button>
         <Button
           type="button"
           variant="outline"
@@ -375,17 +353,6 @@ async function reviewCorrection(decision: 'APPROVED' | 'REJECTED') {
       <!-- Employee: Today + week -->
       <template v-if="!session.isHr">
         <div v-if="!controlActionsReady" class="mb-4 flex flex-wrap gap-2">
-          <Button type="button" :disabled="Boolean(data?.open_session)" @click="punch('/api/attendance/check-in')">
-            Check in
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            :disabled="!data?.open_session"
-            @click="punch('/api/attendance/check-out')"
-          >
-            Check out
-          </Button>
           <Button type="button" variant="outline" :disabled="!data?.sessions.length" @click="openCorrection()">
             Request correction
           </Button>

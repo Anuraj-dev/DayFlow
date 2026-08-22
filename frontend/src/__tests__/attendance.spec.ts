@@ -52,14 +52,11 @@ function namedButton(wrapper: VueWrapper, text: string) {
   return button!
 }
 
-function controlPanelButton(text: RegExp) {
-  const panel = document.querySelector('[data-slot="control-panel"]')
-  expect(panel, 'missing control panel').toBeTruthy()
-  const button = Array.from(panel!.querySelectorAll('button')).find((node) =>
-    text.test(node.textContent ?? ''),
-  )
-  expect(button, `missing ${text} on the control panel`).toBeTruthy()
-  return button as HTMLButtonElement
+function shellPunchButton(wrapper: VueWrapper, text: RegExp) {
+  const shell = wrapper.get('[data-slot="shell-punch"]')
+  const button = shell.findAll('button').find((node) => text.test(node.text()))
+  expect(button, `missing shell punch action matching ${text}`).toBeTruthy()
+  return button!
 }
 
 function inputByLabel(wrapper: VueWrapper, labelText: string) {
@@ -128,7 +125,7 @@ describe('Employee attendance', () => {
     document.body.innerHTML = ''
   })
 
-  it('places check-in and check-out on the control panel and POSTs check-in', async () => {
+  it('keeps punch actions in the navbar and only shows correction in the control panel', async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes('/api/attendance/check-in') && init?.method === 'POST') {
@@ -169,12 +166,12 @@ describe('Employee attendance', () => {
     })
 
     const wrapper = await mountAttendance('EMPLOYEE')
-    const checkIn = controlPanelButton(/Check in/i)
-    const checkOut = controlPanelButton(/Check out/i)
-    expect(checkIn.disabled).toBe(false)
-    expect(checkOut.disabled).toBe(true)
+    const checkIn = shellPunchButton(wrapper, /Check in/i)
+    const controlPanel = document.querySelector('[data-slot="control-panel"]')
+    expect(controlPanel?.textContent).toMatch(/Request correction/i)
+    expect(controlPanel?.textContent).not.toMatch(/Check in|Check out/i)
 
-    checkIn.click()
+    await checkIn.trigger('click')
     await flushPromises()
 
     expect(
@@ -183,8 +180,7 @@ describe('Employee attendance', () => {
           String(url).includes('/api/attendance/check-in') && (init as RequestInit | undefined)?.method === 'POST',
       ),
     ).toBe(true)
-    expect(controlPanelButton(/Check in/i).disabled).toBe(true)
-    expect(controlPanelButton(/Check out/i).disabled).toBe(false)
+    expect(shellPunchButton(wrapper, /Check out/i)).toBeTruthy()
     expect(wrapper.text()).toMatch(/Checked in/i)
   })
 
