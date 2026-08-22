@@ -27,8 +27,12 @@ export interface EmployeeSummary {
   status: EmployeeStatus
   email?: string | null
   role?: Role | null
+  phone?: string | null
+  address?: string | null
   department?: string | null
   title?: string | null
+  employment_type?: string | null
+  location?: string | null
   joined_on?: string | null
 }
 
@@ -57,7 +61,6 @@ export interface HrDashboard {
   pending_approvals: number
   attendance_exceptions: number
   payroll_period_due: boolean
-  today_coverage?: string | null
 }
 
 export type DashboardPayload = EmployeeDashboard | HrDashboard
@@ -113,6 +116,7 @@ export interface PayrollPeriod {
 
 export interface PayrollRecord {
   id: string
+  employee_id?: string
   net_amount: string
   currency: string
   published_at: string | null
