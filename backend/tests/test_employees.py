@@ -359,7 +359,7 @@ async def test_employee_cannot_create_hire(client: AsyncClient):
     assert response.status_code == 403
 
 
-async def test_hr_creates_invited_employee_with_oi_code_and_invite(client: AsyncClient):
+async def test_hr_creates_active_employee_with_generated_credentials(client: AsyncClient):
     hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
     suffix = uuid4().hex[:8]
     email = f"hire.{suffix}@dayflow.demo"
@@ -378,31 +378,20 @@ async def test_hr_creates_invited_employee_with_oi_code_and_invite(client: Async
     assert created.status_code == 201
     body = created.json()
     assert body["employee_code"].startswith("OIJODO2026")
-    assert body["employee"]["status"] == "INVITED"
-    assert body["employee"]["presence"] == "none"
-    assert body["employee"]["title"] == "Analyst"
-    token = body["invite_token"]
-    assert token
+    assert body["status"] == "ACTIVE"
+    assert body["presence"] == "absent"
+    assert body["title"] == "Analyst"
+    assert body["initial_password"]
 
-    activated = await client.post(
-        "/api/auth/activate-account",
-        json={
-            "employee_code": body["employee_code"],
-            "email": email,
-            "token": token,
-            "password": "ChangeMe_Emp12!",
-        },
-    )
-    assert activated.status_code == 200
     signed = await client.post(
         "/api/auth/sign-in",
-        json={"email": email, "password": "ChangeMe_Emp12!"},
+        json={"email": body["employee_code"], "password": body["initial_password"]},
     )
     assert signed.status_code == 200
     assert signed.json()["user"]["employee_code"] == body["employee_code"]
 
     salary = await client.get(
-        f"/api/payroll/employees/{body['employee']['id']}/salary",
+        f"/api/payroll/employees/{body['id']}/salary",
         headers={"Authorization": f"Bearer {hr['access_token']}"},
     )
     assert salary.status_code == 200
@@ -422,7 +411,7 @@ async def test_hr_creates_invited_employee_with_oi_code_and_invite(client: Async
             row.leave_type_id: row.granted_days
             for row in (
                 await db.scalars(
-                    select(LeaveBalance).where(LeaveBalance.employee_id == UUID(body["employee"]["id"]))
+                    select(LeaveBalance).where(LeaveBalance.employee_id == UUID(body["id"]))
                 )
             ).all()
         }

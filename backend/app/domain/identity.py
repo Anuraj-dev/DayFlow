@@ -60,10 +60,9 @@ def is_hr(role: Role) -> bool:
 
 
 def can_read_employee(*, role: Role, actor_employee_id, target_employee_id) -> bool:
-    """Employee details are visible only to the employee or same-org HR."""
-    return role is Role.HR or (
-        actor_employee_id is not None and actor_employee_id == target_employee_id
-    )
+    """Directory cards are org-wide and view-only. Salary and edits stay HR-gated."""
+    del actor_employee_id, target_employee_id
+    return role in {Role.HR, Role.EMPLOYEE}
 
 
 def can_read_private_employee_fields(*, role: Role, actor_employee_id, target_employee_id) -> bool:

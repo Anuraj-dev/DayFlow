@@ -197,7 +197,7 @@ async def _presence_by_employee(
 
 @router.get("", response_model=list[EmployeeSummary])
 async def list_employees(
-    principal: CurrentPrincipal = Depends(require_hr),
+    principal: CurrentPrincipal = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> list[EmployeeSummary]:
     result = await db.scalars(
