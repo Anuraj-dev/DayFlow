@@ -1,34 +1,113 @@
 # Dayflow state
 
-## 2026-08-22 — selected route designs implemented
+Last updated: 2026-08-22
 
-- Rebuilt the shared shell and every implemented employee/HR route against the selected Odoo-style references.
-- Desktop navigation is centered. Mobile navigation, account menu, route actions, filters, tables, and responsive record lists are working.
-- Removed the public `/activate-account` page and route. Sign-in accepts either work email or employee code. Forgot password now has a non-disclosing API response.
-- Employee directory search covers code, name, email, phone, role, title, department, employment type, and location.
-- Employee and HR profile, attendance, time-off, payroll, and settings states now use the selected split-sheet and review-workspace layouts.
-- Deferred by explicit UI state: document upload and settings editing. Employee creation also remains deferred because the backend has no `POST /api/employees` contract.
-- Verification: frontend production build passed, 70 frontend tests passed, focused backend auth tests passed, design detector returned no findings, and desktop/mobile route renders completed without console errors.
+This document records what the current `main` branch can demonstrate and what remains intentionally
+deferred. Product requirements are in `docs/PRODUCT.md`; domain rules are in `docs/DOMAIN.md`.
 
-## 2026-08-22 — implementer-only, merge on green
+## Current release
 
-- Reviewers removed. One implementer per slice: TDD, then GitHub PR, squash-merge if Actions is green.
-- grok-4.5 for smaller slices (frontend `auth-ui`, backend `employees`); grok-4.6 for the rest.
-- CI already on `main` (`.github/workflows/frontend.yml` and `backend.yml`); do not rebuild it.
+Dayflow is a working hackathon MVP for one seeded organization. The Vue shell, FastAPI API, and
+PostgreSQL schema are implemented together and run with Docker Compose.
 
-## 2026-08-22 — UI and delivery
+## Shipped
 
-- Frontend workflow cancelled and rewritten: Odoo 19 product UI, shadcn-vue, no decorative cards, no emoji.
-- Each finished slice opens a GitHub PR and squash-merges if Actions is green.
-- Frontend CI already exists (`.github/workflows/frontend.yml`); do not rebuild it.
+### Identity and access
 
-## 2026-08-22 — repository initialized
+- Seeded HR and employee accounts
+- Email/password sign-in using work email or employee code, plus `/me`
+- Invite-bound employee activation
+- Non-disclosing forgot-password response with the console email adapter
+- Password change for signed-in users
+- Role-aware navigation and separate employee/HR dashboards
+- Organization-scoped server authorization
 
-Scaffolded for the hackathon:
+### People
 
-- Vue 3 + TypeScript SPA in `frontend/` with the 9 route templates and role-aware shell.
-- FastAPI in `backend/` with domain/adapter layout, SQLAlchemy models, seed HR and employee accounts, and auth on `/api/auth/sign-in`.
-- Docker Compose runs Postgres, API, and Vite together.
-- Product and domain docs are in `docs/PRODUCT.md` and `docs/DOMAIN.md`.
+- HR employee directory and employee creation
+- Invite tokens tied to employee, organization, email, and role
+- Self and HR profile access
+- Employee self-edit limited to permitted personal fields
+- Coworker profiles are view-only
+- HR inactive status disables login
 
-Still deferred: live check-in mutations, leave approval transactions, payroll finalization, document upload, settings UI, SMTP, Alembic.
+### Attendance
+
+- Server-time check-in and check-out
+- One open attendance session per employee
+- Employee monthly attendance view
+- HR current-day roster and exception queue
+- Attendance correction requests and HR decisions
+- Text-based attendance statuses and audit events
+
+### Time off
+
+- Paid, sick, and unpaid leave types
+- Organization-local counted days and balances
+- Employee request and pending cancellation
+- HR approve/reject flow with required rejection comments
+- Leave events, balance updates, and audit events
+- Optional PDF/JPEG/PNG certificate for sick leave
+
+### Payroll
+
+- Wage and salary component configuration
+- Monthly payroll periods: draft, finalized, and published
+- Attendance and leave validation before finalization
+- Prorated earning calculations, PF, professional tax, and employer PF
+- Immutable finalized records with snapshot lines
+- Employees see only their own published payroll records
+- HR can review all records and publish a period
+
+### Frontend and delivery
+
+- Odoo 19-style product shell with responsive employee views
+- Desktop navigation, mobile navigation, account menu, route actions, filters, tables, and responsive record lists
+- HR-only People and Settings navigation
+- Loading, empty, validation, permission, and error states on core views
+- Frontend and backend CI workflows
+- Focused authorization and domain tests
+
+## Deferred
+
+- Custom Settings management; seeded work policies are used
+- Document and profile-picture upload
+- Downloadable payslip files; payroll breakdowns are available in the UI
+- Full SMTP delivery and a complete password-reset link flow
+- Alembic migrations; startup uses `Base.metadata.create_all`
+- Reports, analytics, notifications, and Docker Hub publishing
+
+## Seed and data behavior
+
+On an empty database, API startup creates the schema and seeds the demo organization, HR account,
+employee account, leave types, balances, salary components, and one published payroll period.
+
+The Compose volume is persistent. Extra presentation records remain until `docker compose down -v`
+is run. Never load production people, payroll, or documents into this prototype.
+
+## Verification
+
+Local frontend proof:
+
+```bash
+npm --prefix frontend run test:unit -- --run
+npm --prefix frontend run type-check
+npm --prefix frontend run build
+```
+
+Backend proof runs against disposable PostgreSQL because the test fixture recreates its configured
+database. CI provides an isolated PostgreSQL service for every run.
+
+## Operational notes
+
+- Compose project name: `dayflow`
+- PostgreSQL volume: `dayflow_pg`
+- Web app: `localhost:5173`
+- API: `localhost:8000`
+- PostgreSQL host port: `localhost:5433`
+- Stop only this project with `docker compose down`
+
+## Delivery history
+
+- The shared shell and implemented employee/HR routes were aligned to the selected Odoo-style references.
+- Each finished feature slice uses a branch, pull request, local proof, and green CI before squash-merging to `main`.
