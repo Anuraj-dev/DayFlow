@@ -48,7 +48,6 @@ function leaveRequest(overrides: Partial<LeaveRequest> = {}): LeaveRequest {
     status: 'PENDING',
     employee_name: 'Rohan Iyer',
     review_comment: null,
-    has_certificate: false,
     ...overrides,
   }
 }
@@ -58,8 +57,8 @@ function home(overrides: Partial<TimeOffHome> = {}): TimeOffHome {
     role: 'EMPLOYEE',
     employee_id: SELF_ID,
     balances: [
-      { leave_type: 'PAID', remaining_days: 24, granted_days: 24, used_days: 0 },
-      { leave_type: 'SICK', remaining_days: 7, granted_days: 7, used_days: 0 },
+      { leave_type: 'PAID', remaining_days: 18, granted_days: 18, used_days: 0 },
+      { leave_type: 'SICK', remaining_days: 8, granted_days: 8, used_days: 0 },
       { leave_type: 'UNPAID', remaining_days: 0, granted_days: 0, used_days: 0 },
     ],
     requests: [],
@@ -115,7 +114,12 @@ async function mountTimeOff(role: Role) {
           },
           { path: 'dashboard', name: 'dashboard', component: stub, meta: { title: 'Overview' } },
           { path: 'employees', name: 'employees', component: stub, meta: { title: 'People' } },
-          { path: 'attendance', name: 'attendance', component: stub, meta: { title: 'Attendance' } },
+          {
+            path: 'attendance',
+            name: 'attendance',
+            component: stub,
+            meta: { title: 'Attendance' },
+          },
           { path: 'payroll', name: 'payroll', component: stub, meta: { title: 'Payroll' } },
           { path: 'settings', name: 'settings', component: stub, meta: { title: 'Settings' } },
         ],
@@ -156,8 +160,10 @@ describe('Employee time off', () => {
   it('shows balances and a labeled request form', async () => {
     const wrapper = await mountTimeOff('EMPLOYEE')
     expect(wrapper.text()).toMatch(/Time off/)
+    expect(wrapper.text()).toMatch(/Leave balances/)
+    expect(wrapper.text()).toMatch(/Submit a request/)
     expect(wrapper.text()).toMatch(/PAID|Paid/)
-    expect(wrapper.text()).toMatch(/24/)
+    expect(wrapper.text()).toMatch(/18/)
     expect(wrapper.text()).toMatch(/SICK|Sick/)
     expect(wrapper.text()).toMatch(/UNPAID|Unpaid/)
     expect(inputByLabel(wrapper, 'Leave type').exists()).toBe(true)
@@ -165,59 +171,8 @@ describe('Employee time off', () => {
     expect(inputByLabel(wrapper, 'Ends on').exists()).toBe(true)
     expect(inputByLabel(wrapper, 'Reason').exists()).toBe(true)
     expect(namedButton(wrapper, 'Submit request').exists()).toBe(true)
-    expect(wrapper.find('input[type="file"]').exists()).toBe(false)
     expect(wrapper.text()).not.toMatch(/Pending queue/)
     expect(wrapper.text()).not.toMatch(/\bApprove\b/)
-  })
-
-  it('shows an optional certificate field only for sick leave and submits multipart', async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url.includes('/api/time-off/requests') && init?.method === 'POST') {
-        expect(init.body).toBeInstanceOf(FormData)
-        const form = init.body as FormData
-        expect(form.get('leave_type')).toBe('SICK')
-        expect(form.get('starts_on')).toBe('2026-04-07')
-        expect(form.get('ends_on')).toBe('2026-04-07')
-        expect(form.get('certificate')).toBeInstanceOf(File)
-        return jsonResponse(
-          200,
-          leaveRequest({
-            id: 'req-sick',
-            leave_type: 'SICK',
-            starts_on: '2026-04-07',
-            ends_on: '2026-04-07',
-            has_certificate: true,
-            certificate_download_url: '/api/time-off/requests/req-sick/certificate',
-          }),
-        )
-      }
-      return jsonResponse(200, home())
-    })
-
-    const wrapper = await mountTimeOff('EMPLOYEE')
-    await fillRequest(wrapper, {
-      type: 'SICK',
-      starts: '2026-04-07',
-      ends: '2026-04-07',
-      reason: 'Fever with certificate.',
-    })
-    await nextTick()
-    const fileInput = inputByLabel(wrapper, 'Certificate')
-    expect(fileInput.attributes('type')).toBe('file')
-    const file = new File(['%PDF-1.4'], 'note.pdf', { type: 'application/pdf' })
-    Object.defineProperty(fileInput.element, 'files', { value: [file], configurable: true })
-    await fileInput.trigger('change')
-    await namedButton(wrapper, 'Submit request').trigger('click')
-    await flushPromises()
-    expect(
-      fetchMock.mock.calls.some(
-        ([url, init]) =>
-          String(url) === '/api/time-off/requests' &&
-          (init as RequestInit | undefined)?.method === 'POST' &&
-          (init as RequestInit).body instanceof FormData,
-      ),
-    ).toBe(true)
   })
 
   it('treats an unsaved range as a draft and shows counted workdays', async () => {
@@ -237,7 +192,9 @@ describe('Employee time off', () => {
     expect(tones.some((row) => row.text === 'Draft' && row.tone === 'review')).toBe(true)
     expect(
       fetchMock.mock.calls.some(
-        ([url, init]) => String(url).includes('/api/time-off/requests') && (init as RequestInit | undefined)?.method === 'POST',
+        ([url, init]) =>
+          String(url).includes('/api/time-off/requests') &&
+          (init as RequestInit | undefined)?.method === 'POST',
       ),
     ).toBe(false)
   })
@@ -247,7 +204,9 @@ describe('Employee time off', () => {
       jsonResponse(
         200,
         home({
-          requests: [leaveRequest({ status: 'PENDING', starts_on: '2026-09-07', ends_on: '2026-09-09' })],
+          requests: [
+            leaveRequest({ status: 'PENDING', starts_on: '2026-09-07', ends_on: '2026-09-09' }),
+          ],
         }),
       ),
     )
@@ -265,7 +224,9 @@ describe('Employee time off', () => {
     await flushPromises()
     expect(
       fetchMock.mock.calls.some(
-        ([url, init]) => String(url).includes('/api/time-off/requests') && (init as RequestInit | undefined)?.method === 'POST',
+        ([url, init]) =>
+          String(url).includes('/api/time-off/requests') &&
+          (init as RequestInit | undefined)?.method === 'POST',
       ),
     ).toBe(false)
   })
@@ -310,7 +271,16 @@ describe('Employee time off', () => {
         expect(body.starts_on).toBe('2026-08-24')
         expect(body.ends_on).toBe('2026-08-26')
         expect(body.reason).toMatch(/three workdays/i)
-        return jsonResponse(200, leaveRequest({ id: 'req-new', starts_on: body.starts_on, ends_on: body.ends_on, counted_days: 3, status: 'PENDING' }))
+        return jsonResponse(
+          200,
+          leaveRequest({
+            id: 'req-new',
+            starts_on: body.starts_on,
+            ends_on: body.ends_on,
+            counted_days: 3,
+            status: 'PENDING',
+          }),
+        )
       }
       const submitted = fetchMock.mock.calls.some(
         ([called, calledInit]) =>
@@ -323,8 +293,18 @@ describe('Employee time off', () => {
         home({
           requests: submitted
             ? [
-                leaveRequest({ id: 'req-new', starts_on: '2026-08-24', ends_on: '2026-08-26', status: 'PENDING' }),
-                leaveRequest({ id: 'req-ok', starts_on: '2026-07-06', ends_on: '2026-07-07', status: 'APPROVED' }),
+                leaveRequest({
+                  id: 'req-new',
+                  starts_on: '2026-08-24',
+                  ends_on: '2026-08-26',
+                  status: 'PENDING',
+                }),
+                leaveRequest({
+                  id: 'req-ok',
+                  starts_on: '2026-07-06',
+                  ends_on: '2026-07-07',
+                  status: 'APPROVED',
+                }),
                 leaveRequest({
                   id: 'req-no',
                   starts_on: '2026-06-01',
@@ -334,7 +314,12 @@ describe('Employee time off', () => {
                 }),
               ]
             : [
-                leaveRequest({ id: 'req-ok', starts_on: '2026-07-06', ends_on: '2026-07-07', status: 'APPROVED' }),
+                leaveRequest({
+                  id: 'req-ok',
+                  starts_on: '2026-07-06',
+                  ends_on: '2026-07-07',
+                  status: 'APPROVED',
+                }),
                 leaveRequest({
                   id: 'req-no',
                   starts_on: '2026-06-01',
@@ -368,7 +353,8 @@ describe('Employee time off', () => {
     expect(
       fetchMock.mock.calls.some(
         ([url, init]) =>
-          String(url) === '/api/time-off/requests' && (init as RequestInit | undefined)?.method === 'POST',
+          String(url) === '/api/time-off/requests' &&
+          (init as RequestInit | undefined)?.method === 'POST',
       ),
     ).toBe(true)
     expect(wrapper.text()).toMatch(/Pending/)
@@ -397,6 +383,35 @@ describe('Employee time off', () => {
     await namedButton(wrapper, 'Submit request').trigger('click')
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toMatch(/overlap/i)
+  })
+
+  it('confirms cancellation and prevents duplicate cancel requests while pending', async () => {
+    let resolveCancel!: (response: Response) => void
+    const cancelResponse = new Promise<Response>((resolve) => {
+      resolveCancel = resolve
+    })
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/req-pending/cancel') && init?.method === 'POST') return cancelResponse
+      return jsonResponse(
+        200,
+        home({ requests: [leaveRequest({ id: 'req-pending', status: 'PENDING' })] }),
+      )
+    })
+
+    const wrapper = await mountTimeOff('EMPLOYEE')
+    await namedButton(wrapper, 'Cancel request').trigger('click')
+    expect(namedButton(wrapper, 'Confirm cancel').exists()).toBe(true)
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/cancel'))).toHaveLength(0)
+
+    const confirm = namedButton(wrapper, 'Confirm cancel')
+    await confirm.trigger('click')
+    await confirm.trigger('click')
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/cancel'))).toHaveLength(1)
+    expect(namedButton(wrapper, 'Cancelling').attributes('disabled')).toBeDefined()
+
+    resolveCancel(await jsonResponse(200, leaveRequest({ id: 'req-pending', status: 'CANCELLED' })))
+    await flushPromises()
   })
 })
 
@@ -449,39 +464,6 @@ describe('HR leave approvals', () => {
     expect(wrapper.text()).not.toMatch(/Submit request/)
   })
 
-  it('lets HR open a sick-leave certificate download', async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input)
-      if (url.includes('/certificate')) {
-        return Promise.resolve(
-          new Response(new Blob(['%PDF-1.4'], { type: 'application/pdf' }), { status: 200 }),
-        )
-      }
-      return jsonResponse(
-        200,
-        home({
-          role: 'HR',
-          pending_queue: [
-            leaveRequest({
-              id: 'req-sick',
-              employee_name: 'Rohan Iyer',
-              leave_type: 'SICK',
-              has_certificate: true,
-              certificate_download_url: '/api/time-off/requests/req-sick/certificate',
-            }),
-          ],
-        }),
-      )
-    })
-    const wrapper = await mountTimeOff('HR')
-    expect(namedButton(wrapper, 'Download certificate').exists()).toBe(true)
-    await namedButton(wrapper, 'Download certificate').trigger('click')
-    await flushPromises()
-    expect(
-      fetchMock.mock.calls.some(([url]) => String(url) === '/api/time-off/requests/req-sick/certificate'),
-    ).toBe(true)
-  })
-
   it('approves a pending request through POST /api/time-off/requests/:id/approve', async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -490,7 +472,8 @@ describe('HR leave approvals', () => {
       }
       const approved = fetchMock.mock.calls.some(
         ([called, calledInit]) =>
-          String(called).includes('/approve') && (calledInit as RequestInit | undefined)?.method === 'POST',
+          String(called).includes('/approve') &&
+          (calledInit as RequestInit | undefined)?.method === 'POST',
       )
       return jsonResponse(
         200,
@@ -523,17 +506,23 @@ describe('HR leave approvals', () => {
       if (url.includes('/reject') && init?.method === 'POST') {
         const body = JSON.parse(String(init.body ?? '{}')) as { comment?: string }
         expect(body.comment).toMatch(/Team already short/i)
-        return jsonResponse(200, leaveRequest({ id: 'req-pending', status: 'REJECTED', review_comment: body.comment }))
+        return jsonResponse(
+          200,
+          leaveRequest({ id: 'req-pending', status: 'REJECTED', review_comment: body.comment }),
+        )
       }
       const rejected = fetchMock.mock.calls.some(
         ([called, calledInit]) =>
-          String(called).includes('/reject') && (calledInit as RequestInit | undefined)?.method === 'POST',
+          String(called).includes('/reject') &&
+          (calledInit as RequestInit | undefined)?.method === 'POST',
       )
       return jsonResponse(
         200,
         home({
           role: 'HR',
-          pending_queue: rejected ? [] : [leaveRequest({ id: 'req-pending', employee_name: 'Rohan Iyer' })],
+          pending_queue: rejected
+            ? []
+            : [leaveRequest({ id: 'req-pending', employee_name: 'Rohan Iyer' })],
         }),
       )
     })
@@ -545,7 +534,8 @@ describe('HR leave approvals', () => {
     expect(wrapper.get('[role="alert"]').text()).toMatch(/comment/i)
     expect(
       fetchMock.mock.calls.some(
-        ([url, init]) => String(url).includes('/reject') && (init as RequestInit | undefined)?.method === 'POST',
+        ([url, init]) =>
+          String(url).includes('/reject') && (init as RequestInit | undefined)?.method === 'POST',
       ),
     ).toBe(false)
 

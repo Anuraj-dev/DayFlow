@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { CalendarPlusIcon, ClipboardListIcon, BriefcaseBusinessIcon } from '@lucide/vue'
 
 import EmptyState from '@/components/EmptyState.vue'
 import PageHeader from '@/components/PageHeader.vue'
@@ -17,12 +18,17 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import { api, getToken, HttpError } from '@/api/client'
+import { api, HttpError } from '@/api/client'
 import { formatDate } from '@/lib/format'
-import { countedWorkdays, isBlockingLeaveStatus, leaveRequiresBalance, rangesOverlap } from '@/lib/leave'
+import {
+  countedWorkdays,
+  isBlockingLeaveStatus,
+  leaveRequiresBalance,
+  rangesOverlap,
+} from '@/lib/leave'
 import { leaveStatusLabel, leaveTypeLabel, statusTone } from '@/lib/status'
 import { useSessionStore } from '@/stores/session'
-import type { LeaveBalance, LeaveRequest, TimeOffHome } from '@/types/domain'
+import type { LeaveRequest, TimeOffHome } from '@/types/domain'
 
 const LEAVE_TYPES = ['PAID', 'SICK', 'UNPAID'] as const
 
@@ -32,14 +38,15 @@ const error = ref('')
 const actionError = ref('')
 const actionStatus = ref('')
 const loading = ref(true)
-const controlActionsReady = ref(false)
 const leaveType = ref<(typeof LEAVE_TYPES)[number]>('PAID')
 const startsOn = ref('')
 const endsOn = ref('')
 const reason = ref('')
-const certificateFile = ref<File | null>(null)
 const submitting = ref(false)
 const reviewComments = reactive<Record<string, string>>({})
+const decidingRequestId = ref('')
+const cancellingRequestId = ref('')
+const cancelConfirmationId = ref('')
 const selectedRequestId = ref('')
 const pendingPage = ref(1)
 const PENDING_PAGE_SIZE = 15
@@ -83,17 +90,17 @@ const draftLabel = computed(() => {
 const canSubmit = computed(() => {
   return Boolean(
     startsOn.value &&
-      endsOn.value &&
-      reason.value.trim() &&
-      draftCounted.value > 0 &&
-      !overlap.value &&
-      !insufficient.value &&
-      !submitting.value,
+    endsOn.value &&
+    reason.value.trim() &&
+    draftCounted.value > 0 &&
+    !overlap.value &&
+    !insufficient.value &&
+    !submitting.value,
   )
 })
 
-const selectedRequest = computed(() =>
-  (data.value?.pending_queue ?? []).find((row) => row.id === selectedRequestId.value) ?? null,
+const selectedRequest = computed(
+  () => (data.value?.pending_queue ?? []).find((row) => row.id === selectedRequestId.value) ?? null,
 )
 
 const pendingPageCount = computed(() =>
@@ -105,12 +112,6 @@ const pagedPending = computed(() => {
   return (data.value?.pending_queue ?? []).slice(start, start + PENDING_PAGE_SIZE)
 })
 
-function usedDays(row: LeaveBalance): number {
-  if (typeof row.used_days === 'number') return row.used_days
-  if (typeof row.granted_days === 'number') return Math.max(0, row.granted_days - row.remaining_days)
-  return 0
-}
-
 function requestConflicts(row: LeaveRequest): boolean {
   return (data.value?.requests ?? []).some(
     (other) =>
@@ -121,36 +122,14 @@ function requestConflicts(row: LeaveRequest): boolean {
   )
 }
 
-function dateRangeLabel(starts: string, ends: string): string {
-  return `${formatDate(starts)} – ${formatDate(ends)}`
-}
-
-function selectPending(id: string) {
-  selectedRequestId.value = id
-  actionError.value = ''
-}
-
-function focusRequestForm() {
-  document.getElementById('new-leave-request')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  window.setTimeout(() => {
-    const field = document.querySelector<HTMLElement>('#new-leave-request select, #new-leave-request input')
-    field?.focus()
-  }, 200)
-}
-
 async function loadHome() {
   data.value = await api<TimeOffHome>('/api/time-off')
   if (session.isHr && !data.value.pending_queue.some((row) => row.id === selectedRequestId.value)) {
     selectedRequestId.value = data.value.pending_queue[0]?.id ?? ''
   }
-  if (pendingPage.value > pendingPageCount.value) {
-    pendingPage.value = pendingPageCount.value
-  }
 }
 
 onMounted(async () => {
-  await nextTick()
-  controlActionsReady.value = Boolean(document.getElementById('control-actions'))
   try {
     await loadHome()
   } catch (err) {
@@ -177,29 +156,18 @@ async function submitRequest() {
   }
   submitting.value = true
   try {
-    if (leaveType.value === 'SICK' && certificateFile.value) {
-      const form = new FormData()
-      form.append('leave_type', leaveType.value)
-      form.append('starts_on', startsOn.value)
-      form.append('ends_on', endsOn.value)
-      form.append('reason', reason.value.trim())
-      form.append('certificate', certificateFile.value)
-      await api('/api/time-off/requests', { method: 'POST', body: form })
-    } else {
-      await api('/api/time-off/requests', {
-        method: 'POST',
-        body: JSON.stringify({
-          leave_type: leaveType.value,
-          starts_on: startsOn.value,
-          ends_on: endsOn.value,
-          reason: reason.value.trim(),
-        }),
-      })
-    }
+    await api('/api/time-off/requests', {
+      method: 'POST',
+      body: JSON.stringify({
+        leave_type: leaveType.value,
+        starts_on: startsOn.value,
+        ends_on: endsOn.value,
+        reason: reason.value.trim(),
+      }),
+    })
     startsOn.value = ''
     endsOn.value = ''
     reason.value = ''
-    certificateFile.value = null
     await loadHome()
     actionStatus.value = 'Leave request submitted for HR review.'
   } catch (err) {
@@ -210,6 +178,7 @@ async function submitRequest() {
 }
 
 async function decide(id: string, decision: 'approve' | 'reject') {
+  if (decidingRequestId.value) return
   actionError.value = ''
   actionStatus.value = ''
   const comment = (reviewComments[id] ?? '').trim()
@@ -217,6 +186,7 @@ async function decide(id: string, decision: 'approve' | 'reject') {
     actionError.value = 'Rejection requires a comment.'
     return
   }
+  decidingRequestId.value = id
   try {
     await api(`/api/time-off/requests/${id}/${decision}`, {
       method: 'POST',
@@ -224,200 +194,164 @@ async function decide(id: string, decision: 'approve' | 'reject') {
     })
     delete reviewComments[id]
     await loadHome()
-    actionStatus.value = decision === 'approve' ? 'Leave request approved.' : 'Leave request rejected.'
+    actionStatus.value =
+      decision === 'approve' ? 'Leave request approved.' : 'Leave request rejected.'
   } catch (err) {
     actionError.value = err instanceof HttpError ? err.detail : 'Could not update leave.'
+  } finally {
+    decidingRequestId.value = ''
   }
 }
 
-async function openCertificate(row: LeaveRequest) {
-  const path = row.certificate_download_url ?? `/api/time-off/requests/${row.id}/certificate`
-  try {
-    const headers = new Headers({ Accept: '*/*' })
-    const token = getToken()
-    if (token) headers.set('Authorization', `Bearer ${token}`)
-    const response = await fetch(path, { headers })
-    if (!response.ok) {
-      actionError.value = 'Could not download certificate.'
-      return
-    }
-    const blob = await response.blob()
-    const url = URL.createObjectURL(blob)
-    window.open(url, '_blank', 'noopener')
-  } catch {
-    actionError.value = 'Could not download certificate.'
-  }
+function requestCancel(id: string) {
+  if (cancellingRequestId.value) return
+  cancelConfirmationId.value = id
 }
 
-function onCertificateChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  certificateFile.value = input.files?.[0] ?? null
+function keepRequest() {
+  cancelConfirmationId.value = ''
 }
 
 async function cancelRequest(id: string) {
+  if (cancellingRequestId.value || cancelConfirmationId.value !== id) return
   actionError.value = ''
   actionStatus.value = ''
+  cancellingRequestId.value = id
   try {
     await api(`/api/time-off/requests/${id}/cancel`, { method: 'POST' })
     await loadHome()
+    cancelConfirmationId.value = ''
     actionStatus.value = 'Leave request cancelled.'
   } catch (err) {
     actionError.value = err instanceof HttpError ? err.detail : 'Could not cancel leave.'
+  } finally {
+    cancellingRequestId.value = ''
   }
 }
 </script>
 
 <template>
   <section class="sheet">
-    <Teleport v-if="controlActionsReady && !session.isHr" defer to="#control-actions">
-      <div class="flex items-center gap-2">
-        <Button type="button" @click="focusRequestForm">New Request</Button>
-      </div>
-    </Teleport>
-
     <PageHeader
-      v-if="session.isHr"
-      title="Leave approvals"
-      description="Review pending leave with balance and overlap context."
+      :title="session.isHr ? 'Leave approvals' : 'Time off'"
+      :description="
+        session.isHr
+          ? 'Approve or reject with balance and overlap context.'
+          : 'Balances, requests, and a single request form.'
+      "
     />
-
     <p v-if="loading">Loading time off…</p>
     <p v-else-if="error" role="alert">{{ error }}</p>
-    <div v-else class="time-off-body">
+    <div v-else class="grid gap-6">
       <p v-if="actionError" class="feedback-error" role="alert">{{ actionError }}</p>
       <p v-if="actionStatus" class="feedback-success" role="status">{{ actionStatus }}</p>
 
-      <div v-if="session.isHr" class="grid gap-4">
-        <div class="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 class="section-heading">Pending requests</h2>
-            <p class="m-0 mt-1 text-sm text-[#495057]">
-              {{ data?.pending_queue.length ?? 0 }} awaiting review
-            </p>
-          </div>
-          <div v-if="(data?.pending_queue.length ?? 0) > PENDING_PAGE_SIZE" class="flex gap-2">
-            <Button type="button" size="sm" variant="outline" :disabled="pendingPage === 1" @click="pendingPage--">
-              Previous
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              :disabled="pendingPage === pendingPageCount"
-              @click="pendingPage++"
-            >
-              Next
-            </Button>
-          </div>
-        </div>
-
+      <div v-if="session.isHr">
+        <h2 class="mt-0">Pending queue</h2>
         <EmptyState
           v-if="!data?.pending_queue.length"
           title="No pending requests"
           body="Rejection requires a comment. Approval updates balance and attendance in one transaction."
         />
         <template v-else>
-          <div class="hidden sm:block overflow-x-auto">
-            <Table>
-              <TableCaption class="sr-only">Pending leave requests</TableCaption>
-              <TableHeader class="sticky top-0 bg-white">
-                <TableRow>
-                  <TableHead>Employee</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Dates</TableHead>
-                  <TableHead>Days</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <TableRow
-                  v-for="row in pagedPending"
-                  :key="row.id"
-                  class="cursor-pointer"
-                  :data-selected="selectedRequestId === row.id"
-                  :aria-selected="selectedRequestId === row.id"
-                  @click="selectPending(row.id)"
+          <div
+            class="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm text-[#495057]"
+          >
+            <p class="m-0">{{ data?.pending_queue.length }} requests awaiting review</p>
+            <div class="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                :disabled="pendingPage === 1"
+                @click="pendingPage--"
+                >Previous</Button
+              >
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                :disabled="pendingPage === pendingPageCount"
+                @click="pendingPage++"
+                >Next</Button
+              >
+            </div>
+          </div>
+          <Table>
+            <TableCaption class="sr-only">Pending leave requests</TableCaption>
+            <TableHeader class="sticky top-0 bg-white">
+              <TableRow>
+                <TableHead>Employee</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Dates</TableHead>
+                <TableHead>Days</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Review</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow
+                v-for="row in pagedPending"
+                :key="row.id"
+                :data-selected="selectedRequestId === row.id"
+              >
+                <TableCell>{{ row.employee_name ?? 'Employee' }}</TableCell>
+                <TableCell>{{ leaveTypeLabel(row.leave_type) }}</TableCell>
+                <TableCell
+                  >{{ formatDate(row.starts_on) }} to {{ formatDate(row.ends_on) }}</TableCell
                 >
-                  <TableCell class="font-medium">{{ row.employee_name ?? 'Employee' }}</TableCell>
-                  <TableCell>{{ leaveTypeLabel(row.leave_type) }}</TableCell>
-                  <TableCell>
-                    {{ formatDate(row.starts_on) }} to {{ formatDate(row.ends_on) }}
-                  </TableCell>
-                  <TableCell>{{ row.counted_days ?? '—' }}</TableCell>
-                  <TableCell>
-                    <StatusBadge
-                      :label="leaveStatusLabel(row.status)"
-                      :tone="statusTone(leaveStatusLabel(row.status))"
-                    />
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-          </div>
-
-          <div class="mobile-record-list">
-            <button
-              v-for="row in pagedPending"
-              :key="row.id"
-              type="button"
-              class="mobile-record w-full border-0 bg-transparent p-4 text-left"
-              :data-selected="selectedRequestId === row.id"
-              :aria-selected="selectedRequestId === row.id"
-              @click="selectPending(row.id)"
-            >
-              <div class="mobile-record-row">
-                <strong>{{ row.employee_name ?? 'Employee' }}</strong>
-                <StatusBadge
-                  :label="leaveStatusLabel(row.status)"
-                  :tone="statusTone(leaveStatusLabel(row.status))"
-                />
-              </div>
-              <p class="m-0 text-sm text-[#495057]">
-                {{ leaveTypeLabel(row.leave_type) }} · {{ row.counted_days ?? '—' }} days
-              </p>
-              <p class="m-0">{{ formatDate(row.starts_on) }} to {{ formatDate(row.ends_on) }}</p>
-            </button>
-          </div>
+                <TableCell>{{ row.counted_days ?? '—' }}</TableCell>
+                <TableCell>
+                  <StatusBadge
+                    :label="leaveStatusLabel(row.status)"
+                    :tone="statusTone(leaveStatusLabel(row.status))"
+                  />
+                </TableCell>
+                <TableCell>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    :disabled="Boolean(decidingRequestId)"
+                    @click="selectedRequestId = row.id"
+                  >
+                    {{ selectedRequestId === row.id ? 'Selected' : 'Review' }}
+                  </Button>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
 
           <section
             v-if="selectedRequest"
-            class="border-t border-[#DEE2E6] pt-5"
+            class="mt-5 border-t border-border pt-5"
             aria-labelledby="leave-review-title"
           >
-            <div class="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 id="leave-review-title" class="section-heading">Selected request</h2>
-                <p class="m-0 mt-1 text-[#495057]">
-                  {{ selectedRequest.employee_name ?? 'Employee' }} ·
-                  {{ leaveTypeLabel(selectedRequest.leave_type) }} ·
-                  {{ formatDate(selectedRequest.starts_on) }} to {{ formatDate(selectedRequest.ends_on) }}
-                  · {{ selectedRequest.counted_days ?? '—' }} days
-                </p>
-              </div>
-              <StatusBadge
-                :label="leaveStatusLabel(selectedRequest.status)"
-                :tone="statusTone(leaveStatusLabel(selectedRequest.status))"
-              />
+            <h2 id="leave-review-title" class="mt-0">
+              Review {{ selectedRequest.employee_name ?? 'employee request' }}
+            </h2>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <p class="m-0">
+                <strong>Type</strong><br />{{ leaveTypeLabel(selectedRequest.leave_type) }}
+              </p>
+              <p class="m-0">
+                <strong>Dates</strong><br />{{ formatDate(selectedRequest.starts_on) }} to
+                {{ formatDate(selectedRequest.ends_on) }}
+              </p>
+              <p class="m-0">
+                <strong>Counted days</strong><br />{{
+                  selectedRequest.counted_days ?? 'Not calculated'
+                }}
+              </p>
+              <p class="m-0">
+                <strong>Overlap</strong><br />{{
+                  requestConflicts(selectedRequest) ? 'Conflict found' : 'No overlap'
+                }}
+              </p>
             </div>
-
-            <p
-              v-if="requestConflicts(selectedRequest)"
-              class="feedback-error mt-4 mb-0"
-              role="status"
-            >
-              Conflict: this range overlaps another pending or approved request for the same employee.
+            <p v-if="selectedRequest.reason" class="mt-3 mb-0">
+              <strong>Employee reason</strong><br />{{ selectedRequest.reason }}
             </p>
-
-            <p v-if="selectedRequest.reason" class="mt-4 mb-0">
-              <span class="text-sm font-medium">Reason</span><br />
-              {{ selectedRequest.reason }}
-            </p>
-            <p v-if="selectedRequest.has_certificate" class="mt-4 mb-0">
-              <Button type="button" variant="outline" @click="openCertificate(selectedRequest)">
-                Download certificate
-              </Button>
-            </p>
-
             <label class="mt-4 grid max-w-xl gap-1 text-sm font-medium">
               Review comment
               <Textarea
@@ -427,69 +361,116 @@ async function cancelRequest(id: string) {
                 placeholder="Required when rejecting."
               />
             </label>
-
             <div class="mt-3 flex flex-wrap gap-2">
-              <Button type="button" @click="decide(selectedRequest.id, 'approve')">Approve</Button>
+              <Button type="button" variant="outline" :disabled="Boolean(decidingRequestId)" @click="decide(selectedRequest.id, 'approve')"
+                >Approve request</Button
+              >
               <Button
                 type="button"
                 variant="destructive"
+                :disabled="Boolean(decidingRequestId)"
                 @click="decide(selectedRequest.id, 'reject')"
+                >Reject request</Button
               >
-                Reject
-              </Button>
             </div>
           </section>
         </template>
       </div>
 
       <template v-else>
-        <section aria-labelledby="balance-title">
-          <h2 id="balance-title" class="section-heading mb-3">Balance</h2>
-          <div class="hidden sm:block overflow-x-auto">
-            <Table>
-              <TableCaption class="sr-only">Leave balances</TableCaption>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Remaining</TableHead>
-                  <TableHead>Used</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <TableRow v-if="!data?.balances.length">
-                  <TableCell colspan="3">No balances yet</TableCell>
-                </TableRow>
-                <TableRow v-for="row in data?.balances ?? []" :key="row.leave_type">
-                  <TableCell class="font-medium">{{ leaveTypeLabel(row.leave_type) }}</TableCell>
-                  <TableCell>{{ row.remaining_days }}</TableCell>
-                  <TableCell>{{ usedDays(row) }}</TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-          </div>
-          <div v-if="data?.balances.length" class="mobile-record-list">
-            <div v-for="row in data.balances" :key="row.leave_type" class="mobile-record">
-              <div class="mobile-record-row">
-                <span class="mobile-record-label">{{ leaveTypeLabel(row.leave_type) }}</span>
-                <strong class="mobile-record-value">{{ row.remaining_days }} remaining</strong>
-              </div>
-              <p class="m-0 text-sm text-[#495057]">{{ usedDays(row) }} used</p>
+        <div
+          class="grid gap-6 border-b border-border pb-6 lg:grid-cols-[minmax(16rem,0.75fr)_minmax(28rem,1.25fr)] lg:gap-0"
+        >
+          <section
+            class="lg:border-r lg:border-border lg:pr-8"
+            aria-labelledby="leave-balances-title"
+          >
+            <div class="mb-3 flex items-center gap-2">
+              <BriefcaseBusinessIcon class="size-5" :stroke-width="1.75" aria-hidden="true" />
+              <h2 id="leave-balances-title" class="m-0">Leave balances</h2>
             </div>
-          </div>
-        </section>
+            <div v-if="data?.balances.length" class="divide-y divide-border">
+              <div
+                v-for="row in data.balances"
+                :key="row.leave_type"
+                class="flex items-center justify-between gap-4 py-3 first:pt-0"
+              >
+                <span>{{ leaveTypeLabel(row.leave_type) }}</span>
+                <strong class="tabular-nums">{{ row.remaining_days }} days</strong>
+              </div>
+            </div>
+            <p v-else class="m-0 text-muted-foreground">No balances yet.</p>
+          </section>
 
-        <section aria-labelledby="requests-title">
-          <h2 id="requests-title" class="section-heading mb-3">My requests</h2>
-          <div class="hidden sm:block overflow-x-auto">
+          <form class="grid content-start gap-3 lg:pl-8" @submit.prevent="submitRequest">
+            <div class="flex items-center gap-2">
+              <CalendarPlusIcon class="size-5" :stroke-width="1.75" aria-hidden="true" />
+              <h2 class="m-0">Submit a request</h2>
+            </div>
+            <label class="grid gap-1 text-sm font-medium">
+              Leave type
+              <NativeSelect v-model="leaveType" class="w-full">
+                <NativeSelectOption v-for="type in LEAVE_TYPES" :key="type" :value="type">
+                  {{ leaveTypeLabel(type) }}
+                </NativeSelectOption>
+              </NativeSelect>
+            </label>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <label class="grid gap-1 text-sm font-medium">
+                Starts on
+                <Input v-model="startsOn" type="date" required />
+              </label>
+              <label class="grid gap-1 text-sm font-medium">
+                Ends on
+                <Input v-model="endsOn" type="date" required />
+              </label>
+            </div>
+            <label class="grid gap-1 text-sm font-medium">
+              Reason
+              <Textarea
+                v-model="reason"
+                maxlength="500"
+                placeholder="Explain the reason for this request."
+              />
+            </label>
+            <div
+              v-if="draftKind"
+              class="flex flex-wrap items-center gap-x-4 gap-y-2 border-y border-border py-2 text-sm"
+            >
+              <StatusBadge :label="draftLabel" :tone="statusTone(draftLabel)" />
+              <span
+                >Counted days: <strong class="tabular-nums">{{ draftCounted }}</strong></span
+              >
+              <span v-if="draftKind === 'draft'" class="text-muted-foreground">
+                Balance after approval: {{ remainingForType - draftCounted }}
+              </span>
+            </div>
+            <div class="flex flex-wrap items-center gap-3">
+              <Button type="submit" :disabled="!canSubmit">
+                {{ submitting ? 'Submitting…' : 'Submit request' }}
+              </Button>
+              <p v-if="!canSubmit && startsOn && endsOn" class="m-0 text-sm text-muted-foreground">
+                Add a reason and resolve any balance or date conflict before submitting.
+              </p>
+            </div>
+          </form>
+        </div>
+
+        <section aria-labelledby="leave-requests-title">
+          <div class="mb-2 flex items-center gap-2">
+            <ClipboardListIcon class="size-5" :stroke-width="1.75" aria-hidden="true" />
+            <h2 id="leave-requests-title" class="m-0">Requests</h2>
+          </div>
+          <div class="hidden sm:block">
             <Table>
               <TableCaption class="sr-only">Leave requests</TableCaption>
               <TableHeader>
                 <TableRow>
                   <TableHead>Type</TableHead>
                   <TableHead>Dates</TableHead>
-                  <TableHead>Days</TableHead>
+                  <TableHead>Counted days</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead class="text-right">Actions</TableHead>
+                  <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -497,8 +478,8 @@ async function cancelRequest(id: string) {
                   <TableCell colspan="5">No requests yet</TableCell>
                 </TableRow>
                 <TableRow v-for="row in data?.requests ?? []" :key="row.id">
-                  <TableCell class="font-medium">{{ leaveTypeLabel(row.leave_type) }}</TableCell>
-                  <TableCell>{{ dateRangeLabel(row.starts_on, row.ends_on) }}</TableCell>
+                  <TableCell>{{ leaveTypeLabel(row.leave_type) }}</TableCell>
+                  <TableCell>{{ row.starts_on }} – {{ row.ends_on }}</TableCell>
                   <TableCell>{{ row.counted_days ?? '—' }}</TableCell>
                   <TableCell>
                     <StatusBadge
@@ -506,17 +487,19 @@ async function cancelRequest(id: string) {
                       :tone="statusTone(leaveStatusLabel(row.status))"
                     />
                   </TableCell>
-                  <TableCell class="text-right">
+                  <TableCell>
+                    <div v-if="row.status.toUpperCase() === 'PENDING'" class="flex flex-wrap gap-2">
                     <Button
-                      v-if="row.status.toUpperCase() === 'PENDING'"
                       type="button"
                       size="sm"
                       variant="outline"
-                      @click="cancelRequest(row.id)"
+                      :disabled="Boolean(cancellingRequestId)"
+                      @click="cancelConfirmationId === row.id ? cancelRequest(row.id) : requestCancel(row.id)"
                     >
-                      Cancel
+                      {{ cancellingRequestId === row.id ? 'Cancelling…' : cancelConfirmationId === row.id ? 'Confirm cancel' : 'Cancel request' }}
                     </Button>
-                    <span v-else class="text-[#495057]">—</span>
+                    <Button v-if="cancelConfirmationId === row.id" type="button" size="sm" variant="ghost" :disabled="Boolean(cancellingRequestId)" @click="keepRequest">Keep request</Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               </TableBody>
@@ -533,92 +516,21 @@ async function cancelRequest(id: string) {
               </div>
               <p class="m-0">{{ formatDate(row.starts_on) }} to {{ formatDate(row.ends_on) }}</p>
               <p class="m-0 text-[#495057]">{{ row.counted_days ?? '—' }} counted days</p>
+              <div v-if="row.status.toUpperCase() === 'PENDING'" class="grid gap-2">
               <Button
-                v-if="row.status.toUpperCase() === 'PENDING'"
                 type="button"
                 variant="outline"
-                @click="cancelRequest(row.id)"
+                :disabled="Boolean(cancellingRequestId)"
+                @click="cancelConfirmationId === row.id ? cancelRequest(row.id) : requestCancel(row.id)"
               >
-                Cancel
+                {{ cancellingRequestId === row.id ? 'Cancelling…' : cancelConfirmationId === row.id ? 'Confirm cancel' : 'Cancel request' }}
               </Button>
+              <Button v-if="cancelConfirmationId === row.id" type="button" variant="ghost" :disabled="Boolean(cancellingRequestId)" @click="keepRequest">Keep request</Button>
+              </div>
             </article>
           </div>
-          <EmptyState
-            v-else-if="!data?.requests.length"
-            class="sm:hidden"
-            title="No requests yet"
-            body="Submit a leave request below. Pending requests can be cancelled."
-          />
         </section>
-
-        <form
-          id="new-leave-request"
-          class="grid max-w-2xl gap-3 border-t border-[#DEE2E6] pt-5"
-          @submit.prevent="submitRequest"
-        >
-          <h2 class="section-heading">New leave request</h2>
-          <label class="grid gap-1 text-sm font-medium">
-            Leave type
-            <NativeSelect v-model="leaveType" class="w-full">
-              <NativeSelectOption v-for="type in LEAVE_TYPES" :key="type" :value="type">
-                {{ leaveTypeLabel(type) }}
-              </NativeSelectOption>
-            </NativeSelect>
-          </label>
-          <div class="grid gap-3 sm:grid-cols-2">
-            <label class="grid gap-1 text-sm font-medium">
-              Starts on
-              <Input v-model="startsOn" type="date" required />
-            </label>
-            <label class="grid gap-1 text-sm font-medium">
-              Ends on
-              <Input v-model="endsOn" type="date" required />
-            </label>
-          </div>
-          <label class="grid gap-1 text-sm font-medium">
-            Reason
-            <Textarea v-model="reason" rows="3" maxlength="500" placeholder="Required. Explain the reason for this request." />
-          </label>
-          <label v-if="leaveType === 'SICK'" class="grid gap-1 text-sm font-medium">
-            Certificate
-            <Input type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" @change="onCertificateChange" />
-          </label>
-          <div v-if="draftKind" class="grid gap-1">
-            <StatusBadge :label="draftLabel" :tone="statusTone(draftLabel)" />
-            <p class="m-0">Counted days: {{ draftCounted }}</p>
-            <p v-if="draftKind === 'draft'" class="m-0 text-[#495057]">
-              Balance after approval: {{ remainingForType - draftCounted }}
-            </p>
-          </div>
-          <div class="flex flex-wrap items-center gap-3">
-            <Button type="submit" :disabled="!canSubmit">
-              {{ submitting ? 'Submitting…' : 'Submit request' }}
-            </Button>
-            <p v-if="!canSubmit && startsOn && endsOn" class="m-0 text-sm text-[#495057]">
-              Add a reason and resolve any balance or date conflict before submitting.
-            </p>
-          </div>
-        </form>
       </template>
     </div>
   </section>
 </template>
-
-<style scoped>
-.time-off-body {
-  display: grid;
-  gap: 1.5rem;
-}
-
-.section-heading {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.4;
-  color: #212529;
-}
-
-[data-selected='true'] {
-  background: color-mix(in srgb, #714b67 8%, white);
-}
-</style>

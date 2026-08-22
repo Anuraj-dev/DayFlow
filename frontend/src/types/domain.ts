@@ -34,17 +34,6 @@ export interface EmployeeSummary {
   employment_type?: string | null
   location?: string | null
   joined_on?: string | null
-  presence?: string | null
-  date_of_birth?: string | null
-  nationality?: string | null
-  gender?: string | null
-  marital_status?: string | null
-  personal_email?: string | null
-  bank_account_number?: string | null
-  bank_name?: string | null
-  ifsc?: string | null
-  pan?: string | null
-  uan?: string | null
 }
 
 export interface ApiError {
@@ -88,9 +77,7 @@ export interface AttendanceSession {
   status?: string
   source?: string
   worked_minutes?: number | null
-  extra_minutes?: number | null
   correction_status?: string | null
-  scheduled?: boolean
 }
 
 export interface AttendanceException {
@@ -107,44 +94,12 @@ export interface AttendanceException {
   reason?: string | null
 }
 
-export interface AttendanceDay {
-  work_date: string
-  check_in_at: string | null
-  check_out_at: string | null
-  worked_minutes: number | null
-  extra_minutes: number
-  status: string
-  scheduled?: boolean
-}
-
-export interface AttendanceSummary {
-  days_present: number
-  leave_days: number
-  scheduled_working_days: number
-}
-
-export interface AttendanceRosterRow {
-  employee_id: string
-  employee_name: string
-  check_in_at: string | null
-  check_out_at: string | null
-  worked_minutes?: number | null
-  extra_minutes?: number
-  status: string
-}
-
 export interface AttendanceHome {
   role: string
   employee_id: string | null
   sessions: AttendanceSession[]
   open_session: { id: string; check_in_at: string } | null
   exceptions: AttendanceException[]
-  month?: string
-  today?: string | null
-  full_day_minutes?: number
-  summary?: AttendanceSummary | null
-  days?: AttendanceDay[]
-  roster?: AttendanceRosterRow[]
 }
 
 export interface LeaveRequest {
@@ -158,9 +113,6 @@ export interface LeaveRequest {
   counted_days?: number
   reason?: string
   review_comment?: string | null
-  has_certificate?: boolean
-  certificate_download_url?: string | null
-  certificate_expires_at?: string | null
 }
 
 export interface TimeOffHome {
@@ -185,7 +137,6 @@ export interface PayrollRecordLine {
   code: string
   label: string
   amount: string
-  kind?: string
 }
 
 export interface PayrollRecord {
@@ -198,8 +149,6 @@ export interface PayrollRecord {
   net_amount: string
   currency: string
   published_at: string | null
-  scheduled_days?: string | null
-  payable_days?: string | null
   lines?: PayrollRecordLine[]
 }
 
@@ -207,40 +156,13 @@ export interface SalaryComponentAmount {
   code: string
   name?: string
   kind?: string
-  calculation_type?: string
-  rate?: string | null
   amount: string
-  editable?: boolean
-}
-
-export interface SalaryLine {
-  code: string
-  name: string
-  kind: string
-  calculation_type: string
-  rate: string | null
-  amount: string
-  editable: boolean
-}
-
-export interface EmployeeSalary {
-  employee_id: string
-  monthly_wage: string
-  currency: string
-  effective_from: string
-  gross_amount: string
-  deduction_amount: string
-  net_amount: string
-  employer_amount: string
-  lines: SalaryLine[]
 }
 
 export interface EmployeeSalaryInputs {
   employee_id: string
   employee_name?: string
-  monthly_wage?: string
-  net_amount?: string
-  components: SalaryLine[] | SalaryComponentAmount[]
+  components: SalaryComponentAmount[]
 }
 
 export interface PayrollException {
@@ -260,7 +182,5 @@ export interface PayrollHome {
 
 export interface SalaryComponentPatchResponse {
   employee_id: string
-  monthly_wage?: string
-  components?: SalaryComponentAmount[]
-  lines?: SalaryLine[]
+  components: SalaryComponentAmount[]
 }

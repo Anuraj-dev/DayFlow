@@ -19,6 +19,16 @@ body,
   max-width: 100%;
 }
 
+html {
+  scrollbar-color: #adb5bd var(--canvas);
+  scrollbar-width: thin;
+}
+
+::selection {
+  background: rgb(113 75 103 / 22%);
+  color: var(--ink);
+}
+
 body {
   margin: 0;
   font-family: var(--font);
@@ -38,9 +48,14 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+}
+
 @layer base {
   a {
     color: inherit;
+    text-underline-offset: 3px;
   }
 }
 
@@ -220,19 +235,12 @@ button {
     min-width: 0;
     max-width: 1400px;
     overflow: hidden;
+    margin-inline: auto;
   }
 
   .sheet-auth {
     width: 100%;
     max-width: 28rem;
-  }
-
-  .control-panel {
-    min-height: var(--control-panel-min-height);
-  }
-
-  .control-panel :where(button, a, input, select) {
-    font-size: 14px;
   }
 
   .feedback-success,
@@ -294,6 +302,13 @@ button {
   @media (min-width: 640px) {
     .mobile-record-list {
       display: none;
+    }
+  }
+
+
+  @media (max-width: 639px) {
+    .sheet {
+      padding: 18px 14px;
     }
   }
 }

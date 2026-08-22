@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
-import ActivateAccountView from '@/views/ActivateAccountView.vue'
 import SignInView from '@/views/SignInView.vue'
 
 type FetchMock = ReturnType<typeof vi.fn>
@@ -40,7 +39,6 @@ async function makeRouter(path: string, query?: Record<string, string>): Promise
     history: createMemoryHistory(),
     routes: [
       { path: '/sign-in', name: 'sign-in', component: SignInView },
-      { path: '/activate-account', name: 'activate-account', component: ActivateAccountView },
       { path: '/dashboard', name: 'dashboard', component: dashboardStub },
     ],
   })
@@ -49,13 +47,9 @@ async function makeRouter(path: string, query?: Record<string, string>): Promise
   return router
 }
 
-async function mountView(
-  component: typeof SignInView | typeof ActivateAccountView,
-  path: string,
-  query?: Record<string, string>,
-) {
+async function mountView(path = '/sign-in', query?: Record<string, string>) {
   const router = await makeRouter(path, query)
-  const wrapper = mount(component, {
+  const wrapper = mount(SignInView, {
     global: {
       plugins: [createPinia(), router],
     },
@@ -78,16 +72,26 @@ describe('SignInView', () => {
     sessionStorage.clear()
   })
 
-  it('renders the default sign-in form with forgot-password and activation entry', async () => {
-    const { wrapper } = await mountView(SignInView, '/sign-in')
+  it('accepts a work email or login ID without showing activation', async () => {
+    const { wrapper } = await mountView()
 
-    expect(wrapper.get('h1').text()).toMatch(/Sign in with your work email/i)
-    expect(inputByLabel(wrapper, 'Work email').attributes('type')).toBe('email')
+    expect(wrapper.get('h1').text()).toMatch(/Sign in to Dayflow/i)
+    expect(inputByLabel(wrapper, 'Work email or login ID').attributes('type')).toBe('text')
     expect(inputByLabel(wrapper, 'Password').attributes('type')).toBe('password')
     expect(namedButton(wrapper, 'Sign in').attributes('disabled')).toBeUndefined()
     expect(namedButton(wrapper, 'Forgot password').exists()).toBe(true)
-    expect(wrapper.get('a[href="/activate-account"]').text()).toMatch(/Activate account/i)
+    expect(wrapper.text()).not.toMatch(/Activate account/i)
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  it('toggles password visibility with an accessible control', async () => {
+    const { wrapper } = await mountView()
+    const toggle = wrapper.get('button[aria-label="Show password"]')
+
+    await toggle.trigger('click')
+
+    expect(inputByLabel(wrapper, 'Password').attributes('type')).toBe('text')
+    expect(wrapper.get('button[aria-label="Hide password"]').element).toBeTruthy()
   })
 
   it('shows a bad-credentials alert after a 401 from /api/auth/sign-in', async () => {
@@ -96,33 +100,32 @@ describe('SignInView', () => {
       return jsonResponse(401, { detail: 'Bad credentials.' })
     })
 
-    const { wrapper } = await mountView(SignInView, '/sign-in')
-    await inputByLabel(wrapper, 'Work email').setValue('hr@dayflow.demo')
+    const { wrapper } = await mountView()
+    await inputByLabel(wrapper, 'Work email or login ID').setValue('EMP-1001')
     await inputByLabel(wrapper, 'Password').setValue('WrongPassword1!')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     expect(wrapper.get('[role="alert"]').text()).toMatch(/Bad credentials/i)
-    expect(wrapper.text()).toMatch(/Sign-in failed|Bad credentials/i)
+    expect(wrapper.text()).toMatch(/Sign-in failed/i)
   })
 
-  it('shows locked or disabled copy after a 403 from /api/auth/sign-in', async () => {
+  it('shows account-unavailable copy after a 403 from /api/auth/sign-in', async () => {
     fetchMock.mockImplementation(() =>
       jsonResponse(403, { detail: 'Account is locked or disabled.' }),
     )
 
-    const { wrapper } = await mountView(SignInView, '/sign-in')
-    await inputByLabel(wrapper, 'Work email').setValue('locked@dayflow.demo')
+    const { wrapper } = await mountView()
+    await inputByLabel(wrapper, 'Work email or login ID').setValue('locked@dayflow.demo')
     await inputByLabel(wrapper, 'Password').setValue('ChangeMe_HR12!')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    const alert = wrapper.get('[role="alert"]')
-    expect(alert.text()).toMatch(/locked or disabled/i)
-    expect(wrapper.text()).toMatch(/Account locked/i)
+    expect(wrapper.get('[role="alert"]').text()).toMatch(/locked or disabled/i)
+    expect(wrapper.text()).toMatch(/Account unavailable/i)
   })
 
-  it('submits forgot-password with the work email and shows reset-sent copy', async () => {
+  it('submits forgot-password with a work email or login ID and returns to sign in', async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toContain('/api/auth/forgot-password')
       expect(init?.method).toBe('POST')
@@ -130,24 +133,82 @@ describe('SignInView', () => {
       return jsonResponse(200, { detail: 'If that email is on file, a reset link was sent.' })
     })
 
-    const { wrapper } = await mountView(SignInView, '/sign-in')
+    const { wrapper } = await mountView()
     await namedButton(wrapper, 'Forgot password').trigger('click')
 
     expect(wrapper.get('h1').text()).toMatch(/Reset your password/i)
-    await inputByLabel(wrapper, 'Work email').setValue('hr@dayflow.demo')
+    expect(inputByLabel(wrapper, 'Work email or login ID').attributes('type')).toBe('text')
+    await inputByLabel(wrapper, 'Work email or login ID').setValue('hr@dayflow.demo')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     expect(wrapper.get('[role="status"]').text()).toMatch(/reset link/i)
-    expect(wrapper.text()).toMatch(/Sign in/i)
+    expect(wrapper.get('h1').text()).toMatch(/Sign in to Dayflow/i)
   })
 
-  it('signs a seeded account in against /api/auth/sign-in and opens the dashboard', async () => {
+  it('opens a reset-token form on the sign-in route and checks confirmation locally', async () => {
+    const { wrapper } = await mountView('/sign-in', { reset: 'reset-token' })
+
+    expect(wrapper.get('h1').text()).toMatch(/Choose a new password/i)
+    expect(wrapper.find('#sign-in-identifier').exists()).toBe(false)
+    expect(inputByLabel(wrapper, 'New password').attributes('autocomplete')).toBe('new-password')
+    expect(inputByLabel(wrapper, 'Confirm new password').attributes('autocomplete')).toBe(
+      'new-password',
+    )
+
+    await inputByLabel(wrapper, 'New password').setValue('Changed_Reset12!')
+    await inputByLabel(wrapper, 'Confirm new password').setValue('Different_Reset12!')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(wrapper.get('[role="alert"]').text()).toMatch(/Passwords do not match/i)
+  })
+
+  it('resets the password, removes the token from the URL, and returns to sign in', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toContain('/api/auth/reset-password')
+      expect(init?.method).toBe('POST')
+      expect(JSON.parse(String(init?.body))).toEqual({
+        token: 'valid-reset-token',
+        password: 'Changed_Reset12!',
+      })
+      return jsonResponse(200, { detail: 'Password reset. Sign in with your new password.' })
+    })
+
+    const { wrapper, router } = await mountView('/sign-in', { reset: 'valid-reset-token' })
+    await inputByLabel(wrapper, 'New password').setValue('Changed_Reset12!')
+    await inputByLabel(wrapper, 'Confirm new password').setValue('Changed_Reset12!')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.reset).toBeUndefined()
+    expect(wrapper.get('h1').text()).toMatch(/Sign in to Dayflow/i)
+    expect(wrapper.get('[role="status"]').text()).toMatch(/Password reset/i)
+  })
+
+  it('keeps the reset form available when the token is invalid or expired', async () => {
+    fetchMock.mockImplementation(() =>
+      jsonResponse(400, { detail: 'Reset link is invalid or expired. Request a new one.' }),
+    )
+
+    const { wrapper } = await mountView('/sign-in', { reset: 'expired-token' })
+    await inputByLabel(wrapper, 'New password').setValue('Changed_Reset12!')
+    await inputByLabel(wrapper, 'Confirm new password').setValue('Changed_Reset12!')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('h1').text()).toMatch(/Choose a new password/i)
+    expect(wrapper.get('[role="alert"]').text()).toMatch(/invalid or expired/i)
+    expect(namedButton(wrapper, 'Back to sign in').element).toBeTruthy()
+  })
+
+  it('signs in with the existing API payload and opens the requested page', async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toContain('/api/auth/sign-in')
       expect(init?.method).toBe('POST')
       expect(JSON.parse(String(init?.body))).toEqual({
-        email: 'hr@dayflow.demo',
+        email: 'EMP-1001',
         password: 'ChangeMe_HR12!',
       })
       return jsonResponse(200, {
@@ -166,151 +227,13 @@ describe('SignInView', () => {
       })
     })
 
-    const { wrapper, router } = await mountView(SignInView, '/sign-in')
-    await inputByLabel(wrapper, 'Work email').setValue('hr@dayflow.demo')
+    const { wrapper, router } = await mountView('/sign-in', { next: '/dashboard' })
+    await inputByLabel(wrapper, 'Work email or login ID').setValue(' EMP-1001 ')
     await inputByLabel(wrapper, 'Password').setValue('ChangeMe_HR12!')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     expect(router.currentRoute.value.path).toBe('/dashboard')
     expect(sessionStorage.getItem('dayflow.token')).toBe('seed-token')
-  })
-})
-
-describe('ActivateAccountView', () => {
-  let fetchMock: FetchMock
-
-  beforeEach(() => {
-    fetchMock = vi.fn(() => Promise.reject(new Error('Unexpected fetch')))
-    vi.stubGlobal('fetch', fetchMock)
-    sessionStorage.clear()
-  })
-
-  afterEach(() => {
-    vi.unstubAllGlobals()
-    vi.restoreAllMocks()
-    sessionStorage.clear()
-  })
-
-  async function fillValidInvite(wrapper: VueWrapper) {
-    await inputByLabel(wrapper, 'Employee ID').setValue('EMP-1001')
-    await inputByLabel(wrapper, 'Work email').setValue('new.hire@dayflow.demo')
-    await inputByLabel(wrapper, 'Invite token').setValue('invite-token-1')
-    await inputByLabel(wrapper, 'New password').setValue('ChangeMe_Emp12!')
-    await inputByLabel(wrapper, 'Confirm password').setValue('ChangeMe_Emp12!')
-  }
-
-  it('renders the valid invite form', async () => {
-    const { wrapper } = await mountView(ActivateAccountView, '/activate-account')
-
-    expect(wrapper.get('h1').text()).toMatch(/Activate account/i)
-    expect(inputByLabel(wrapper, 'Employee ID').element).toBeTruthy()
-    expect(inputByLabel(wrapper, 'Work email').attributes('type')).toBe('email')
-    expect(inputByLabel(wrapper, 'Invite token').element).toBeTruthy()
-    expect(inputByLabel(wrapper, 'New password').attributes('type')).toBe('password')
-    expect(namedButton(wrapper, 'Activate').attributes('disabled')).toBeUndefined()
-    expect(wrapper.get('a[href="/sign-in"]').text()).toMatch(/Sign in/i)
-    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
-  })
-
-  it('shows expired copy when activate-account reports an expired invite', async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toContain('/api/auth/activate-account')
-      expect(init?.method).toBe('POST')
-      expect(JSON.parse(String(init?.body))).toEqual({
-        employee_code: 'EMP-1001',
-        email: 'new.hire@dayflow.demo',
-        token: 'invite-token-1',
-        password: 'ChangeMe_Emp12!',
-      })
-      return jsonResponse(400, { detail: 'This invite has expired.' })
-    })
-
-    const { wrapper } = await mountView(ActivateAccountView, '/activate-account')
-    await fillValidInvite(wrapper)
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-
-    expect(wrapper.get('[role="alert"]').text()).toMatch(/expired/i)
-    expect(wrapper.text()).toMatch(/Invite expired/i)
-    expect(wrapper.find('form').exists()).toBe(false)
-  })
-
-  it('shows already-used copy when activate-account reports a used invite', async () => {
-    fetchMock.mockImplementation(() =>
-      jsonResponse(400, { detail: 'This invite has already been used.' }),
-    )
-
-    const { wrapper } = await mountView(ActivateAccountView, '/activate-account')
-    await fillValidInvite(wrapper)
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-
-    expect(wrapper.get('[role="alert"]').text()).toMatch(/already been used|already used/i)
-    expect(wrapper.text()).toMatch(/Already used/i)
-    expect(wrapper.find('form').exists()).toBe(false)
-  })
-
-  it('still treats 410 expired and 409 used as dedicated screens', async () => {
-    fetchMock.mockImplementation(() => jsonResponse(410, { detail: 'Gone.' }))
-    const expired = await mountView(ActivateAccountView, '/activate-account')
-    await fillValidInvite(expired.wrapper)
-    await expired.wrapper.get('form').trigger('submit')
-    await flushPromises()
-    expect(expired.wrapper.text()).toMatch(/Invite expired/i)
-    expired.wrapper.unmount()
-
-    fetchMock.mockImplementation(() => jsonResponse(409, { detail: 'Conflict.' }))
-    const used = await mountView(ActivateAccountView, '/activate-account')
-    await fillValidInvite(used.wrapper)
-    await used.wrapper.get('form').trigger('submit')
-    await flushPromises()
-    expect(used.wrapper.text()).toMatch(/Already used/i)
-    used.wrapper.unmount()
-  })
-
-  it('keeps the form for other 400 activation errors', async () => {
-    fetchMock.mockImplementation(() => jsonResponse(400, { detail: 'Invite is invalid.' }))
-
-    const { wrapper } = await mountView(ActivateAccountView, '/activate-account')
-    await fillValidInvite(wrapper)
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-
-    expect(wrapper.find('form').exists()).toBe(true)
-    expect(wrapper.get('[role="alert"]').text()).toMatch(/Invite is invalid/i)
-    expect(wrapper.text()).not.toMatch(/Invite expired/i)
-    expect(wrapper.text()).not.toMatch(/Already used/i)
-  })
-
-  it('shows verification-sent copy after a successful activate-account response', async () => {
-    fetchMock.mockImplementation(() =>
-      jsonResponse(200, {
-        status: 'verification_sent',
-        detail: 'Check your work email to verify this account.',
-      }),
-    )
-
-    const { wrapper } = await mountView(ActivateAccountView, '/activate-account')
-    await fillValidInvite(wrapper)
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-
-    expect(fetchMock).toHaveBeenCalled()
-    const [url, init] = fetchMock.mock.calls[0] as [RequestInfo, RequestInit]
-    expect(String(url)).toContain('/api/auth/activate-account')
-    expect(init.method).toBe('POST')
-    expect(wrapper.get('[role="status"]').text()).toMatch(/Verification sent/i)
-    expect(wrapper.text()).toMatch(/work email/i)
-    expect(wrapper.find('form').exists()).toBe(false)
-  })
-
-  it('shows the verified frame from the email-verification landing query', async () => {
-    const { wrapper } = await mountView(ActivateAccountView, '/activate-account', { verified: '1' })
-
-    expect(wrapper.get('[role="status"]').text()).toMatch(/verified/i)
-    expect(wrapper.text()).toMatch(/Email verified|verified/i)
-    expect(wrapper.get('a[href="/sign-in"]').element).toBeTruthy()
-    expect(wrapper.find('form').exists()).toBe(false)
   })
 })

@@ -38,7 +38,7 @@ Status always includes text, not color alone.
 
 ## Shell
 
-- 46px full-width plum bar, white text at 90% opacity, 1px darker bottom border, square entries, 8% black hover.
+- 46px full-width plum bar, white text at 90% opacity, 1px darker bottom border, square entries, 8% black hover. Keep the product navigation centered on desktop, with the Dayflow wordmark pinned left and the account menu pinned right.
 - White control panel under the bar: search/filter and primary actions only. Hide it when empty. 1px `#DEE2E6` bottom border.
 - Content on `#F8F9FA` with a white sheet. Form sheet max ~1400px.
 

@@ -3,12 +3,11 @@ import { describe, expect, it } from 'vitest'
 import router from '@/router'
 
 describe('routes', () => {
-  it('registers the nine MVP templates', () => {
+  it('registers the implemented route templates without account activation', () => {
     const paths = router.getRoutes().map((route) => route.path)
     expect(paths).toEqual(
       expect.arrayContaining([
         '/sign-in',
-        '/activate-account',
         '/dashboard',
         '/employees',
         '/employees/:employeeId',
@@ -18,5 +17,6 @@ describe('routes', () => {
         '/settings',
       ]),
     )
+    expect(paths).not.toContain('/activate-account')
   })
 })
