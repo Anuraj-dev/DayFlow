@@ -330,14 +330,20 @@ describe('role-aware product views', () => {
         exceptions: [],
       })
     })
+    const slot = document.createElement('div')
+    slot.id = 'control-actions'
+    document.body.appendChild(slot)
     const wrapper = await mountView(AttendanceView, 'EMPLOYEE')
-    const checkIn = wrapper.findAll('button').find((node) => node.text().match(/Check in/i))
+    const checkIn = Array.from(slot.querySelectorAll('button')).find((node) =>
+      /Check in/i.test(node.textContent ?? ''),
+    )
     expect(checkIn, 'missing Check in action').toBeTruthy()
-    expect(checkIn!.attributes('disabled')).toBeUndefined()
-    await checkIn!.trigger('click')
+    expect((checkIn as HTMLButtonElement).disabled).toBe(false)
+    checkIn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
     expect(fetchMock.mock.calls.some(([url, init]) => String(url).includes('/api/attendance/check-in') && (init as RequestInit | undefined)?.method === 'POST')).toBe(true)
     expect(wrapper.get('[role="alert"]').text()).toMatch(/not implemented|Check-in/i)
+    slot.remove()
   })
 
   it('loads time off from /api/time-off as a request table', async () => {
