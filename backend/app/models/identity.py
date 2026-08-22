@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import DateTime, ForeignKey, ForeignKeyConstraint, Index, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKey
@@ -26,8 +26,9 @@ class Organization(UUIDPrimaryKey, TimestampMixin, Base):
 
 class User(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "users"
+    __table_args__ = (Index("uq_users_email_lower", text("lower(email)"), unique=True),)
 
-    email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
@@ -55,6 +56,11 @@ class AccountInvite(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "account_invites"
     __table_args__ = (
         UniqueConstraint("token_hash"),
+        ForeignKeyConstraint(
+            ["employee_id", "organization_id"],
+            ["employees.id", "employees.organization_id"],
+            name="fk_account_invites_employee_org",
+        ),
         Index(
             "uq_account_invites_open_employee",
             "employee_id",

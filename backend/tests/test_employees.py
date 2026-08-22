@@ -300,3 +300,50 @@ async def test_employee_patch_writes_audit_event(client: AsyncClient):
         assert event.after_json is not None
         assert event.after_json["phone"] == phone
         assert event.actor_user_id is not None
+
+
+async def test_hr_inactive_status_disables_sign_in(client: AsyncClient):
+    employee = await _sign_in(client, "employee@dayflow.demo", "ChangeMe_Emp12!")
+    employee_id = employee["user"]["employee_id"]
+    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
+
+    patched = await client.patch(
+        f"/api/employees/{employee_id}",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+        json={"status": "INACTIVE"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["status"] == "INACTIVE"
+
+    locked = await client.post(
+        "/api/auth/sign-in",
+        json={"email": "employee@dayflow.demo", "password": "ChangeMe_Emp12!"},
+    )
+    assert locked.status_code == 403
+    assert locked.json()["detail"] == "Account is locked or disabled."
+
+    restored = await client.patch(
+        f"/api/employees/{employee_id}",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+        json={"status": "ACTIVE"},
+    )
+    assert restored.status_code == 200
+    again = await client.post(
+        "/api/auth/sign-in",
+        json={"email": "employee@dayflow.demo", "password": "ChangeMe_Emp12!"},
+    )
+    assert again.status_code == 200
+
+
+async def test_patch_rejects_null_required_fields(client: AsyncClient):
+    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
+    employee = await _sign_in(client, "employee@dayflow.demo", "ChangeMe_Emp12!")
+    employee_id = employee["user"]["employee_id"]
+
+    response = await client.patch(
+        f"/api/employees/{employee_id}",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+        json={"first_name": None, "title": None},
+    )
+    assert response.status_code == 400
+    assert "cannot be empty" in response.json()["detail"]

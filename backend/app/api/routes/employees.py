@@ -2,6 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,6 +14,7 @@ from app.domain.identity import (
     can_edit_employee,
     can_read_employee,
 )
+from app.domain.roles import EmployeeStatus, UserStatus
 from app.models import AuditEvent, Employee, OrganizationMembership, User
 from app.schemas.employee import EmployeeSummary, EmployeeUpdateRequest
 
@@ -20,6 +22,9 @@ router = APIRouter(prefix="/employees", tags=["employees"])
 
 _JOB_FIELDS = frozenset({"title", "department", "employment_type", "location"})
 _EMPLOYEE_FIELDS = frozenset({"phone", "address", "first_name", "last_name", "status"})
+_REQUIRED_PATCH_FIELDS = frozenset(
+    {"first_name", "last_name", "status", "title", "department", "employment_type", "location"}
+)
 
 
 def _summary(employee: Employee, email: str | None = None, role: str | None = None) -> EmployeeSummary:
@@ -147,6 +152,12 @@ async def patch_employee(
         assert_employee_patch_allowed(role=principal.role, fields=set(updates))
     except IdentityError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    for field, value in updates.items():
+        if field in _REQUIRED_PATCH_FIELDS and (value is None or value == ""):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field} cannot be empty.",
+            )
 
     employee = await db.scalar(
         select(Employee)
@@ -176,6 +187,14 @@ async def patch_employee(
         for field, value in job_updates.items():
             setattr(current_job, field, value)
 
+    if "status" in updates and employee.user_id is not None:
+        linked_user = await db.get(User, employee.user_id)
+        if linked_user is not None:
+            if updates["status"] == EmployeeStatus.INACTIVE.value:
+                linked_user.status = UserStatus.DISABLED.value
+            elif updates["status"] == EmployeeStatus.ACTIVE.value:
+                linked_user.status = UserStatus.ACTIVE.value
+
     after = _snapshot(employee)
     db.add(
         AuditEvent(
@@ -188,7 +207,14 @@ async def patch_employee(
             after_json=after,
         )
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Employee update could not be saved.",
+        ) from exc
     await db.refresh(employee)
     # Refresh job assignments after commit
     employee = await db.scalar(

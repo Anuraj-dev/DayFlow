@@ -489,3 +489,95 @@ async def test_activate_account_rejects_second_invite_for_active_employee(client
     )
     assert original.status_code == 200
     assert original.json()["user"]["employee_code"] == employee_code
+
+
+async def test_sign_in_matches_email_case_insensitively(client: AsyncClient):
+    suffix = uuid4().hex[:8]
+    stored = f"Case.{suffix}@Dayflow.Demo"
+    password = "ChangeMe_Emp12!"
+    async with SessionLocal() as session:
+        org = await session.scalar(select(Organization).limit(1))
+        assert org is not None
+        user = User(
+            email=stored,
+            password_hash=hash_password(password),
+            status=UserStatus.ACTIVE.value,
+        )
+        session.add(user)
+        await session.flush()
+        session.add(
+            OrganizationMembership(
+                organization_id=org.id, user_id=user.id, role=Role.EMPLOYEE.value
+            )
+        )
+        session.add(
+            Employee(
+                organization_id=org.id,
+                user_id=user.id,
+                employee_code=f"CS-{suffix[:4].upper()}",
+                first_name="Case",
+                last_name="Fold",
+                status=EmployeeStatus.ACTIVE.value,
+                joined_on=date(2026, 1, 1),
+            )
+        )
+        await session.commit()
+
+    response = await client.post(
+        "/api/auth/sign-in",
+        json={"email": stored.lower(), "password": password},
+    )
+    assert response.status_code == 200
+    assert response.json()["user"]["email"].lower() == stored.lower()
+
+
+async def test_activate_account_stores_normalized_email(client: AsyncClient):
+    suffix = uuid4().hex[:8]
+    invite_email = f"mixed.{suffix}@dayflow.demo"
+    employee_code = f"MIX-{suffix[:4].upper()}"
+    token = f"mixed-case-token-{suffix}"
+    password = "ChangeMe_Emp12!"
+
+    async with SessionLocal() as session:
+        org = await session.scalar(select(Organization).limit(1))
+        hr = await session.scalar(select(User).where(User.email == settings.seed_hr_email))
+        assert org is not None and hr is not None
+        employee = Employee(
+            organization_id=org.id,
+            employee_code=employee_code,
+            first_name="Mixed",
+            last_name="Case",
+            status=EmployeeStatus.INVITED.value,
+            joined_on=date(2026, 8, 1),
+        )
+        session.add(employee)
+        await session.flush()
+        session.add(
+            AccountInvite(
+                organization_id=org.id,
+                employee_id=employee.id,
+                email=invite_email.upper(),
+                role=Role.EMPLOYEE.value,
+                token_hash=_invite_token_hash(token),
+                expires_at=datetime.now(UTC) + timedelta(days=7),
+                created_by=hr.id,
+            )
+        )
+        await session.commit()
+
+    response = await client.post(
+        "/api/auth/activate-account",
+        json={
+            "employee_code": employee_code,
+            "email": invite_email,
+            "token": token,
+            "password": password,
+        },
+    )
+    assert response.status_code == 200
+    signed_in = await client.post(
+        "/api/auth/sign-in",
+        json={"email": invite_email.upper(), "password": password},
+    )
+    assert signed_in.status_code == 200
+    assert signed_in.json()["user"]["email"] == invite_email

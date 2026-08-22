@@ -12,6 +12,10 @@ def hash_invite_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def normalize_email(value: str) -> str:
+    return str(value).strip().casefold()
+
+
 def public_signup_role() -> None:
     """Public registration never assigns a role. Roles arrive on an invite."""
     return None

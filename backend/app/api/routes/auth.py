@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,7 @@ from app.domain.identity import (
     assert_employee_can_activate,
     assert_invite_usable,
     hash_invite_token,
+    normalize_email,
     role_from_invite,
 )
 from app.domain.roles import EmployeeStatus, Role, UserStatus
@@ -53,7 +54,8 @@ async def _session_user(
 
 @router.post("/sign-in", response_model=SignInResponse)
 async def sign_in(body: SignInRequest, db: AsyncSession = Depends(get_db)) -> SignInResponse:
-    user = await db.scalar(select(User).where(User.email == body.email))
+    email = normalize_email(str(body.email))
+    user = await db.scalar(select(User).where(func.lower(User.email) == email))
     if user is None:
         verify_password(body.password, _MISSING_USER_HASH)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bad credentials.")
@@ -102,9 +104,14 @@ async def activate_account(
     employee = await db.scalar(
         select(Employee).where(Employee.id == invite.employee_id).with_for_update()
     )
-    if employee is None or employee.employee_code != body.employee_code:
+    email = normalize_email(str(body.email))
+    if (
+        employee is None
+        or employee.employee_code != body.employee_code
+        or employee.organization_id != invite.organization_id
+    ):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invite is invalid.")
-    if invite.email.casefold() != str(body.email).casefold():
+    if normalize_email(invite.email) != email:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invite is invalid.")
 
     try:
@@ -112,13 +119,13 @@ async def activate_account(
     except IdentityError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    existing_user = await db.scalar(select(User).where(User.email == body.email))
+    existing_user = await db.scalar(select(User).where(func.lower(User.email) == email))
     if existing_user is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This email is already in use.")
 
     role = role_from_invite(invite.role)
     user = User(
-        email=str(body.email),
+        email=email,
         password_hash=hash_password(body.password),
         email_verified_at=now,
         status=UserStatus.ACTIVE.value,
@@ -146,7 +153,7 @@ async def activate_account(
 
     email_adapter.send(
         EmailMessage(
-            to=str(body.email),
+            to=email,
             subject="Verify your Dayflow account",
             body="Your Dayflow account is ready. Check this message as the activation verification payload.",
         )

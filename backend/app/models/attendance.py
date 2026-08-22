@@ -1,7 +1,7 @@
 from datetime import date, datetime, time
 from uuid import UUID
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Time
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, Time, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,6 +30,14 @@ class Holiday(UUIDPrimaryKey, TimestampMixin, Base):
 
 class AttendanceSession(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "attendance_sessions"
+    __table_args__ = (
+        Index(
+            "uq_attendance_open_session",
+            "employee_id",
+            unique=True,
+            postgresql_where=text("status = 'OPEN' AND check_out_at IS NULL"),
+        ),
+    )
 
     employee_id: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), nullable=False)
     work_date: Mapped[date] = mapped_column(Date, nullable=False)
