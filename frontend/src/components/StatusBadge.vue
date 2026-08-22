@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BanIcon, CircleAlertIcon, CircleCheckIcon } from '@lucide/vue'
+import { AlertTriangleIcon, CheckCircle2Icon, CircleIcon, XCircleIcon } from '@lucide/vue'
 import { computed } from 'vue'
 
 const props = defineProps<{
@@ -7,29 +7,18 @@ const props = defineProps<{
   label: string
 }>()
 
-const resolvedTone = computed(() => props.tone ?? 'neutral')
-
 const icon = computed(() => {
-  switch (resolvedTone.value) {
-    case 'confirmed':
-      return CircleCheckIcon
-    case 'danger':
-      return BanIcon
-    default:
-      return CircleAlertIcon
-  }
+  if (props.tone === 'confirmed') return CheckCircle2Icon
+  if (props.tone === 'review') return AlertTriangleIcon
+  if (props.tone === 'danger') return XCircleIcon
+  return CircleIcon
 })
 </script>
 
 <template>
-  <span class="badge" :data-tone="resolvedTone">
-    <component
-      :is="icon"
-      class="badge-icon"
-      :stroke-width="2"
-      aria-hidden="true"
-    />
-    <span>{{ label }}</span>
+  <span class="badge" :data-tone="tone ?? 'neutral'">
+    <component :is="icon" class="badge-icon" :stroke-width="2" aria-hidden="true" />
+    {{ label }}
   </span>
 </template>
 
@@ -37,22 +26,20 @@ const icon = computed(() => {
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.3rem;
   padding: 0.15rem 0.5rem;
-  border: 1px solid #dee2e6;
+  border: 1px solid #DEE2E6;
   border-radius: 3px;
   font-size: 13px;
   font-weight: 500;
-  line-height: 1.4;
-  background: #ffffff;
+  background: #FFFFFF;
   color: #212529;
-  white-space: nowrap;
 }
 
 .badge-icon {
-  width: 0.875rem;
-  height: 0.875rem;
-  flex-shrink: 0;
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: none;
 }
 
 .badge[data-tone='confirmed'] {
@@ -71,11 +58,5 @@ const icon = computed(() => {
   background: var(--danger-bg);
   color: #a61b29;
   border-color: var(--danger);
-}
-
-.badge[data-tone='neutral'] {
-  background: #ffffff;
-  color: #495057;
-  border-color: #dee2e6;
 }
 </style>

@@ -25,7 +25,7 @@ Domain model and rules for the hackathon MVP. This is not an API spec or a migra
 
 `employees`
 
-- `id`, `organization_id`, `user_id`, `employee_code`, `first_name`, `last_name`, `phone`, `address`, `date_of_birth`, `nationality`, `gender`, `marital_status`, `personal_email`, `bank_account_number`, `bank_name`, `ifsc`, `pan`, `uan`, `profile_image_key`, `status`, `joined_on`, `manager_employee_id`
+- `id`, `organization_id`, `user_id`, `employee_code`, `first_name`, `last_name`, `phone`, `address`, `profile_image_key`, `status`, `joined_on`, `manager_employee_id`
 - Unique on organization and employee code
 
 `job_assignments`
@@ -43,16 +43,6 @@ Domain model and rules for the hackathon MVP. This is not an API spec or a migra
 
 - `id`, `employee_id`, `work_date`, `check_in_at`, `check_out_at`, `source`, `status`, `worked_minutes`
 - At most one open session per employee unless split shifts are explicitly supported
-- Extra minutes are `max(0, worked_minutes - full_day_minutes)` and are derived in domain math, not stored
-
-Payable days (attendance → payroll)
-
-- Scheduled working days exclude policy weekends and holidays
-- `PRESENT` and `LATE` count 1 payable day; `HALF_DAY` counts 0.5
-- Approved paid leave on a scheduled day counts 1; unpaid leave, absence, and missing attendance count 0
-- Leave is not also counted as an absence
-- Employee attendance is a selected organization-local month (default current month) with daily punches, worked/extra minutes, status, and summary counts (days present, leave days, scheduled working days)
-- HR attendance is today's org-scoped roster plus the exception queue
 
 `attendance_correction_requests`
 
@@ -86,25 +76,13 @@ Payable days (attendance → payroll)
 
 ## Payroll
 
-Payroll is a monthly wage split. Domain math in `backend/app/domain/payroll.py` turns wage + structure into earning, deduction, and employer lines. Routes load, call that function, persist, and return. They do not re-encode the formula.
-
-`employee_wages`
-
-- `id`, `organization_id`, `employee_id`, `monthly_wage`, `effective_from`, `effective_to`
-- Finalization uses the wage effective on the payroll period end date
-
 `salary_components`
 
-- `id`, `organization_id`, `name`, `code`, `kind` where kind is `EARNING`, `DEDUCTION`, or `EMPLOYER`, `calculation_type`, `taxable`, `active`
-- `calculation_type` is `FIXED`, `PERCENT_OF_WAGE`, `PERCENT_OF_BASIC`, or `REMAINDER`
-- Among earnings, only HRA may be a percentage of Basic. Employee PF may be a percentage of Basic as a deduction. Cycles and negative wage, rates, or amounts are rejected
+- `id`, `organization_id`, `name`, `code`, `kind` where kind is earning or deduction, `calculation_type`, `taxable`, `active`
 
 `employee_salary_components`
 
-- `id`, `employee_id`, `salary_component_id`, `calculation_type`, `rate`, `amount`, `effective_from`, `effective_to`
-- `rate` holds a percentage (for example 50.00 is 50%). `amount` is the computed rupee value, or the configured rupee value when type is `FIXED`
-- Remainder (`FIXED_ALLOW`) is computed so Basic + HRA + Standard Allowance + Performance Bonus + LTA + remainder equals monthly wage. It is not editable
-- If configured earnings would exceed monthly wage, the change is rejected
+- `id`, `employee_id`, `salary_component_id`, `amount`, `effective_from`, `effective_to`
 
 `payroll_periods`
 
@@ -112,21 +90,11 @@ Payroll is a monthly wage split. Domain math in `backend/app/domain/payroll.py` 
 
 `payroll_records`
 
-- `id`, `payroll_period_id`, `employee_id`, `gross_amount`, `deduction_amount`, `net_amount`, `currency`, `payslip_storage_key`, `published_at`, `scheduled_days`, `payable_days`
-- Gross is the sum of earnings, which equals monthly wage when the structure is valid and payable days equal scheduled days
-- Finalization prorates every earning by `payable_days / scheduled_days`. Employee and employer PF are 12% of the prorated Basic. Professional tax stays ₹200 and is not prorated
-- Deduction amount is employee PF + professional tax. Employer PF is informational and does not reduce net pay
-- Open sessions or pending corrections whose work date falls in the period block finalization
-- Finalized records are immutable. A later salary change does not rewrite a snapshot
+- `id`, `payroll_period_id`, `employee_id`, `gross_amount`, `deduction_amount`, `net_amount`, `currency`, `payslip_storage_key`, `published_at`
 
 `payroll_record_lines`
 
 - `id`, `payroll_record_id`, `salary_component_id`, `label_snapshot`, `amount`
-- Finalization snapshots labels and amounts. Deduction amounts are stored signed negative
-
-Seeded structure for the staff employee (and new hires): monthly wage ₹50,000; Basic 50% of wage; HRA 50% of Basic; Standard Allowance ₹4,167 fixed; Performance Bonus 8.33% of wage; LTA 8.33% of wage; Fixed Allowance remainder; employee PF 12% of Basic; employer PF 12% of Basic (employer line); professional tax ₹200.
-
-HR may configure any employee's wage and editable rates or amounts. Employees may read only their own breakdown. Coworker salary stays hidden. Salary changes are org-scoped and write `audit_events`.
 
 ## Audit
 
@@ -146,8 +114,7 @@ Organization
   │            ├── Attendance sessions ── Correction requests
   │            ├── Leave balances ── Leave type
   │            ├── Leave requests ── Leave request events
-  │            ├── Salary components
-  │            └── Wages
+  │            └── Salary components
   ├── Work policies and holidays
   └── Payroll periods ── Payroll records ── Payroll record lines
 ```
@@ -160,9 +127,9 @@ Organization
 4. Approved leave and attendance cannot contradict each other without an HR exception.
 5. Leave ranges cannot overlap another pending or approved request.
 6. Rejection requires a comment. Approval records the balance used.
-7. Employees can read org directory cards and coworker profiles in view-only form. They cannot edit another person's record. Attendance, leave, documents, and payroll stay self-or-HR.
+7. Employees can read only their own profile, attendance, leave, documents, and payroll.
 8. Employees cannot edit job, role, salary, balance, attendance history, or approval fields.
-9. Finalized payroll records are immutable. A correction creates a new revision or adjustment period. Finalization snapshots scheduled and payable days and prorates earnings from attendance; professional tax stays ₹200.
+9. Finalized payroll records are immutable. A correction creates a new revision or adjustment period.
 10. File downloads require short-lived authorized URLs.
 
 Implement these in `backend/app/domain`. Routes call domain functions; they do not re-encode the rules.
@@ -173,7 +140,7 @@ Implement these in `backend/app/domain`. Routes call domain functions; they do n
 |---|---|
 | Company model | One organization per deployed demo, but keep `organization_id` in every business table |
 | HR onboarding | First HR is seeded; later HR users are invite-only |
-| Employee sign-up | Invite activation, not open registration |
+| Employee sign-up | No open registration. HR creates the employee account and initial credentials |
 | Password policy | Minimum 12 characters, breached-password check if available, rate-limited login |
 | Forgot password | Email reset link with short expiry. Console email adapter until SMTP exists |
 | Attendance source | Server timestamp; no GPS or biometric tracking |
@@ -182,7 +149,7 @@ Implement these in `backend/app/domain`. Routes call domain functions; they do n
 | Corrections | Employee requests, HR decides, audit event always recorded |
 | Weekends and holidays | Excluded from leave day count by policy |
 | Leave cancellation | Employee can cancel pending requests; approved leave needs HR reversal |
-| Payroll engine | Monthly wage split with PF (12% of Basic, using prorated Basic) and professional tax ₹200; earnings prorated by payable/scheduled days; no broader tax engine |
+| Payroll engine | Fixed monthly components only; no tax engine |
 | Payslip | Generated only after HR finalizes and publishes a period |
 | Documents | Private storage with HR/self access, size and type limits. Tab may stay deferred |
 | Notifications | In-app activity only; email stays future work except account security |

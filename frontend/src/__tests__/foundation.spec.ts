@@ -172,9 +172,7 @@ describe('AppShell chrome', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
-    fetchMock = vi.fn(() =>
-      jsonResponse(200, { kind: 'EMPLOYEE', attendance_state: 'not_checked_in' }),
-    )
+    fetchMock = vi.fn(() => jsonResponse(200, { kind: 'EMPLOYEE', attendance_state: 'not_checked_in' }))
     vi.stubGlobal('fetch', fetchMock)
     sessionStorage.clear()
   })
@@ -248,21 +246,7 @@ describe('role-aware product views', () => {
       history: createMemoryHistory(),
       routes: [
         { path: '/', name: 'home', component: component as never },
-        {
-          path: '/employees/:employeeId',
-          name: 'employee-profile',
-          component: defineComponent({ setup: () => () => h('p') }),
-        },
-        {
-          path: '/attendance',
-          name: 'attendance',
-          component: defineComponent({ setup: () => () => h('p') }),
-        },
-        {
-          path: '/time-off',
-          name: 'time-off',
-          component: defineComponent({ setup: () => () => h('p') }),
-        },
+        { path: '/employees/:employeeId', name: 'employee-profile', component: defineComponent({ setup: () => () => h('p') }) },
       ],
     })
     await router.push('/')
@@ -345,20 +329,20 @@ describe('role-aware product views', () => {
         exceptions: [],
       })
     })
-    const { wrapper } = await mountShell('EMPLOYEE', '/attendance')
-    const checkIn = wrapper.get('[data-slot="shell-punch"] button')
-    expect(checkIn.text()).toMatch(/Check in/i)
-    expect(checkIn.attributes('disabled')).toBeUndefined()
-    await checkIn.trigger('click')
+    const slot = document.createElement('div')
+    slot.id = 'control-actions'
+    document.body.appendChild(slot)
+    const wrapper = await mountView(AttendanceView, 'EMPLOYEE')
+    const checkIn = Array.from(slot.querySelectorAll('button')).find((node) =>
+      /Check in/i.test(node.textContent ?? ''),
+    )
+    expect(checkIn, 'missing Check in action').toBeTruthy()
+    expect((checkIn as HTMLButtonElement).disabled).toBe(false)
+    checkIn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
-    expect(
-      fetchMock.mock.calls.some(
-        ([url, init]) =>
-          String(url).includes('/api/attendance/check-in') &&
-          (init as RequestInit | undefined)?.method === 'POST',
-      ),
-    ).toBe(true)
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).includes('/api/attendance/check-in') && (init as RequestInit | undefined)?.method === 'POST')).toBe(true)
     expect(wrapper.get('[role="alert"]').text()).toMatch(/not implemented|Check-in/i)
+    slot.remove()
   })
 
   it('loads time off from /api/time-off as a request table', async () => {
@@ -372,7 +356,8 @@ describe('role-aware product views', () => {
       })
     })
     const wrapper = await mountView(TimeOffView, 'EMPLOYEE')
-    expect(wrapper.get('table').text()).toMatch(/paid/i)
+    expect(wrapper.text()).toMatch(/Paid\s*8 days/i)
+    expect(wrapper.get('table').text()).toMatch(/No requests yet/i)
     expect(wrapper.text()).toMatch(/No requests yet|0/)
   })
 
@@ -390,19 +375,12 @@ describe('role-aware product views', () => {
             status: 'PUBLISHED',
           },
         ],
-        records: [
-          {
-            id: 'r1',
-            net_amount: '2400.00',
-            currency: 'INR',
-            published_at: '2026-09-05T00:00:00Z',
-          },
-        ],
+        records: [{ id: 'r1', net_amount: '2400.00', currency: 'USD', published_at: '2026-09-05T00:00:00Z' }],
       })
     })
     const wrapper = await mountView(PayrollView, 'EMPLOYEE')
-    expect(wrapper.get('table').text()).toMatch(/Aug 1, 2026/)
-    expect(wrapper.get('table').text()).toMatch(/Published/)
-    expect(wrapper.text()).toMatch(/₹2,400\.00/)
+    expect(wrapper.text()).toMatch(/Aug 1, 2026/)
+    expect(wrapper.text()).toMatch(/Published/)
+    expect(wrapper.text()).toMatch(/\$2,400\.00/)
   })
 })

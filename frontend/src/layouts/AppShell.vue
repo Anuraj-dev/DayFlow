@@ -1,22 +1,22 @@
 <script setup lang="ts">
 import {
   BanknoteIcon,
+  CalendarDaysIcon,
+  ChevronDownIcon,
   Clock3Icon,
   LayoutDashboardIcon,
   MenuIcon,
-  PlaneIcon,
   SettingsIcon,
+  UserRoundIcon,
   UsersRoundIcon,
   XIcon,
 } from '@lucide/vue'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, RouterView, useRouter } from 'vue-router'
 
-import { useAttendanceStore } from '@/stores/attendance'
 import { useSessionStore } from '@/stores/session'
 
 const session = useSessionStore()
-const attendance = useAttendanceStore()
 const router = useRouter()
 const menuOpen = ref(false)
 const mobileNavOpen = ref(false)
@@ -27,7 +27,7 @@ const nav = computed(() => {
   const items = [
     { to: '/dashboard', label: 'Overview', icon: LayoutDashboardIcon },
     { to: '/attendance', label: 'Attendance', icon: Clock3Icon },
-    { to: '/time-off', label: 'Time off', icon: PlaneIcon },
+    { to: '/time-off', label: 'Time off', icon: CalendarDaysIcon },
     { to: '/payroll', label: 'Payroll', icon: BanknoteIcon },
   ]
   if (session.isHr) {
@@ -42,19 +42,10 @@ const profilePath = computed(() =>
 )
 
 async function signOut() {
-  attendance.reset()
   session.signOut()
   menuOpen.value = false
   mobileNavOpen.value = false
   await router.push({ name: 'sign-in' })
-}
-
-async function punch(path: '/api/attendance/check-in' | '/api/attendance/check-out') {
-  try {
-    await attendance.punch(path)
-  } catch {
-    // Store keeps the API error for the shell alert.
-  }
 }
 
 function closeMobileNav() {
@@ -85,7 +76,6 @@ function onDocumentKey(event: KeyboardEvent) {
 onMounted(() => {
   document.addEventListener('pointerdown', onDocumentPointer)
   document.addEventListener('keydown', onDocumentKey)
-  if (session.user?.employee_id) void attendance.load()
 })
 
 onUnmounted(() => {
@@ -95,68 +85,37 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex min-h-screen flex-col bg-[#F8F9FA]">
+  <div class="flex min-h-screen flex-col bg-background">
     <a
       class="skip sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-3 focus:z-50 focus:bg-white focus:px-3 focus:py-1"
       href="#main"
     >
       Skip to content
     </a>
-    <header
-      data-slot="app-navbar"
-      class="flex h-[46px] w-full items-stretch border-b border-black/20 bg-[#714B67] text-white/90"
-    >
-      <div class="flex items-center px-4 text-[14px] font-bold tracking-wide text-white">
+    <header data-slot="app-navbar" class="app-navbar h-[46px] bg-primary">
+      <RouterLink class="app-brand" to="/dashboard" aria-label="Dayflow overview">
         Dayflow
-      </div>
-      <nav aria-label="Product areas" class="hidden min-w-0 flex-1 items-stretch sm:flex">
+      </RouterLink>
+      <nav aria-label="Product areas" class="desktop-nav">
         <RouterLink
           v-for="item in nav"
           :key="item.to"
           :to="item.to"
-          class="relative flex items-center gap-2 px-3 text-[14px] text-white/90 no-underline hover:bg-black/8"
-          active-class="bg-black/12 text-white after:absolute after:right-3 after:bottom-0 after:left-3 after:h-0.5 after:bg-white"
+          class="nav-link"
+          active-class="nav-link-active"
         >
           <component
             :is="item.icon"
-            class="size-4 shrink-0"
+            class="mr-2 size-4 shrink-0"
             :stroke-width="1.75"
             aria-hidden="true"
           />
           {{ item.label }}
         </RouterLink>
       </nav>
-      <div
-        v-if="attendance.visible"
-        data-slot="shell-punch"
-        class="ml-auto flex min-w-0 max-w-[min(100%,16.5rem)] items-center gap-2 px-2 sm:ml-0 sm:max-w-none sm:px-3"
-      >
-        <span class="min-w-0 truncate text-[13px] text-white/90" role="status">{{
-          attendance.statusLabel
-        }}</span>
-        <button
-          v-if="attendance.canCheckIn"
-          type="button"
-          class="h-7 shrink-0 border border-white/40 bg-transparent px-2 text-[13px] text-white hover:bg-black/8 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-white"
-          :disabled="attendance.punching"
-          @click="punch('/api/attendance/check-in')"
-        >
-          Check in
-        </button>
-        <button
-          v-else-if="attendance.canCheckOut"
-          type="button"
-          class="h-7 shrink-0 border border-white/40 bg-transparent px-2 text-[13px] text-white hover:bg-black/8 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-white"
-          :disabled="attendance.punching"
-          @click="punch('/api/attendance/check-out')"
-        >
-          Check out
-        </button>
-      </div>
       <button
         type="button"
-        class="flex size-[46px] items-center justify-center text-white sm:hidden"
-        :class="attendance.visible ? '' : 'ml-auto'"
+        class="mobile-nav-toggle"
         :aria-expanded="mobileNavOpen"
         aria-controls="mobile-product-nav"
         aria-label="Toggle navigation"
@@ -165,27 +124,24 @@ onUnmounted(() => {
         <XIcon v-if="mobileNavOpen" class="size-5" aria-hidden="true" />
         <MenuIcon v-else class="size-5" aria-hidden="true" />
       </button>
-      <div ref="menuWrap" class="relative hidden items-center pr-2 sm:flex">
+      <div ref="menuWrap" class="account-wrap">
         <button
           ref="accountButton"
           type="button"
-          class="h-full px-3 text-[14px] text-white/90 hover:bg-black/8"
+          class="account-button"
           aria-haspopup="menu"
           aria-controls="account-menu"
           :aria-expanded="menuOpen"
           @click="menuOpen = !menuOpen"
         >
-          {{ session.displayName }}
+          <UserRoundIcon class="size-4" :stroke-width="1.75" aria-hidden="true" />
+          <span>{{ session.displayName }}</span>
+          <ChevronDownIcon class="size-3.5" :stroke-width="1.75" aria-hidden="true" />
         </button>
-        <div
-          v-if="menuOpen"
-          id="account-menu"
-          class="absolute top-full right-2 z-20 min-w-40 rounded-[3px] border border-[#DEE2E6] bg-white text-[#212529] shadow-none"
-          role="menu"
-        >
+        <div v-if="menuOpen" id="account-menu" class="account-menu" role="menu">
           <RouterLink
             role="menuitem"
-            class="block px-3 py-2 text-[14px] no-underline hover:bg-[#F1F3F5]"
+            class="account-menu-item"
             :to="profilePath"
             @click="closeAccountMenu()"
           >
@@ -194,7 +150,7 @@ onUnmounted(() => {
           <button
             type="button"
             role="menuitem"
-            class="block w-full px-3 py-2 text-left text-[14px] hover:bg-[#F1F3F5]"
+            class="account-menu-item w-full text-left"
             @click="signOut"
           >
             Log out
@@ -206,46 +162,19 @@ onUnmounted(() => {
       v-if="mobileNavOpen"
       id="mobile-product-nav"
       aria-label="Mobile product areas"
-      class="border-b border-black/20 bg-[#714B67] text-white sm:hidden"
+      class="mobile-product-nav border-b border-black/20 bg-primary text-white"
     >
-      <div
-        v-if="attendance.visible"
-        data-slot="shell-punch-mobile"
-        class="flex min-h-[44px] items-center justify-between gap-3 border-t border-white/10 px-4"
-      >
-        <span class="min-w-0 truncate text-[13px] text-white/90" role="status">{{
-          attendance.statusLabel
-        }}</span>
-        <button
-          v-if="attendance.canCheckIn"
-          type="button"
-          class="h-8 shrink-0 border border-white/40 bg-transparent px-2 text-[13px] text-white hover:bg-black/8 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-white"
-          :disabled="attendance.punching"
-          @click="punch('/api/attendance/check-in')"
-        >
-          Check in
-        </button>
-        <button
-          v-else-if="attendance.canCheckOut"
-          type="button"
-          class="h-8 shrink-0 border border-white/40 bg-transparent px-2 text-[13px] text-white hover:bg-black/8 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-white"
-          :disabled="attendance.punching"
-          @click="punch('/api/attendance/check-out')"
-        >
-          Check out
-        </button>
-      </div>
       <RouterLink
         v-for="item in nav"
         :key="item.to"
         :to="item.to"
-        class="flex min-h-[44px] items-center gap-3 border-t border-white/10 px-4 text-[14px] no-underline"
+        class="flex min-h-[44px] items-center border-t border-white/10 px-4 no-underline"
         active-class="bg-black/12 font-medium"
         @click="closeMobileNav"
       >
         <component
           :is="item.icon"
-          class="size-4 shrink-0"
+          class="mr-3 size-4 shrink-0"
           :stroke-width="1.75"
           aria-hidden="true"
         />
@@ -253,38 +182,182 @@ onUnmounted(() => {
       </RouterLink>
       <RouterLink
         :to="profilePath"
-        class="flex min-h-[44px] items-center border-t border-white/10 px-4 text-[14px] no-underline"
+        class="flex min-h-[44px] items-center border-t border-white/10 px-4 no-underline"
         @click="closeMobileNav"
       >
         My profile
       </RouterLink>
       <button
         type="button"
-        class="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 text-left text-[14px]"
+        class="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 text-left"
         @click="signOut"
       >
         Log out
       </button>
     </nav>
-    <p
-      v-if="attendance.visible && (attendance.actionError || attendance.error)"
-      data-slot="shell-punch-error"
-      class="border-b border-[#DEE2E6] bg-white px-4 py-1 text-[13px] text-[#DC3545]"
-      role="alert"
-    >
-      {{ attendance.actionError || attendance.error }}
-    </p>
     <div
       data-slot="control-panel"
-      class="control-panel flex min-w-0 flex-wrap items-center gap-2 border-b border-[#DEE2E6] bg-white px-4 py-2 has-[#control-actions:empty]:hidden"
+      class="flex min-w-0 flex-wrap items-center gap-3 border-b border-[#DEE2E6] bg-white px-4 py-2 has-[#control-actions:empty]:hidden"
     >
       <div
         id="control-actions"
-        class="flex w-full min-w-0 flex-wrap items-center gap-2 sm:ml-auto sm:w-auto"
+        class="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto"
       />
     </div>
-    <main id="main" class="min-w-0 flex-1 bg-[#F8F9FA] p-4">
+    <main id="main" class="min-w-0 flex-1 bg-[#F8F9FA] p-3 sm:p-4">
       <RouterView />
     </main>
   </div>
 </template>
+
+<style scoped>
+.app-navbar {
+  display: grid;
+  width: 100%;
+  height: 46px;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  border-bottom: 1px solid rgb(0 0 0 / 20%);
+  background: #714b67;
+  color: rgb(255 255 255 / 90%);
+}
+
+.app-brand {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  padding: 0 16px;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+
+.desktop-nav {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  justify-content: center;
+}
+
+.nav-link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  color: rgb(255 255 255 / 88%);
+  text-decoration: none;
+  transition:
+    background-color 120ms var(--ease-enter),
+    color 120ms var(--ease-enter);
+}
+
+.nav-link:hover {
+  background: rgb(0 0 0 / 8%);
+  color: #fff;
+}
+
+.nav-link-active {
+  background: rgb(0 0 0 / 12%);
+  color: #fff;
+}
+
+.nav-link-active::after {
+  position: absolute;
+  right: 12px;
+  bottom: 0;
+  left: 12px;
+  height: 2px;
+  background: #fff;
+  content: '';
+}
+
+.account-wrap {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  justify-self: end;
+  padding-right: 8px;
+}
+
+.account-button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  color: rgb(255 255 255 / 90%);
+}
+
+.account-button:hover,
+.account-button[aria-expanded='true'] {
+  background: rgb(0 0 0 / 8%);
+  color: #fff;
+}
+
+.account-button span {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  right: 8px;
+  min-width: 176px;
+  overflow: hidden;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  background: #fff;
+  color: #212529;
+  box-shadow: 0 8px 18px rgb(33 37 41 / 10%);
+}
+
+.account-menu-item {
+  display: block;
+  min-height: 38px;
+  padding: 8px 12px;
+  text-decoration: none;
+}
+
+.account-menu-item:hover,
+.account-menu-item:focus-visible {
+  background: #f1f3f5;
+}
+
+.mobile-nav-toggle {
+  display: none;
+  width: 46px;
+  height: 46px;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+  color: #fff;
+}
+
+@media (max-width: 1023px) {
+  .app-navbar {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  .desktop-nav,
+  .account-wrap {
+    display: none;
+  }
+
+  .mobile-nav-toggle {
+    display: flex;
+    grid-column: 3;
+  }
+}
+
+@media (min-width: 1024px) {
+  .mobile-product-nav {
+    display: none;
+  }
+}
+</style>

@@ -1,30 +1,28 @@
 <script setup lang="ts">
-import { MailIcon, MapPinIcon, PhoneIcon } from '@lucide/vue'
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import {
+  ArrowLeftIcon,
+  BanknoteIcon,
+  BriefcaseBusinessIcon,
+  FileTextIcon,
+  MailIcon,
+  MapPinIcon,
+  PhoneIcon,
+} from '@lucide/vue'
+import { computed, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import StatusBadge from '@/components/StatusBadge.vue'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
-import {
-  Table,
-  TableBody,
-  TableCaption,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { api, HttpError } from '@/api/client'
 import { formatCurrency, formatDate, formatEnumLabel } from '@/lib/format'
 import { employeeStatusLabel, statusTone } from '@/lib/status'
 import { useSessionStore } from '@/stores/session'
-import type { EmployeeSalary, EmployeeStatus, EmployeeSummary, SalaryLine } from '@/types/domain'
+import type { EmployeeStatus, EmployeeSummary, PayrollHome } from '@/types/domain'
 
 type Draft = {
   first_name: string
@@ -36,16 +34,6 @@ type Draft = {
   department: string
   employment_type: string
   location: string
-  date_of_birth: string
-  nationality: string
-  gender: string
-  marital_status: string
-  personal_email: string
-  bank_account_number: string
-  bank_name: string
-  ifsc: string
-  pan: string
-  uan: string
 }
 
 const EMPLOYEE_FIELDS = new Set<keyof Draft>(['phone', 'address'])
@@ -59,44 +47,21 @@ const HR_FIELDS = new Set<keyof Draft>([
   'department',
   'employment_type',
   'location',
-  'date_of_birth',
-  'nationality',
-  'gender',
-  'marital_status',
-  'personal_email',
-  'bank_account_number',
-  'bank_name',
-  'ifsc',
-  'pan',
-  'uan',
 ])
 
 const route = useRoute()
+const router = useRouter()
 const session = useSessionStore()
 const person = ref<EmployeeSummary | null>(null)
-const salary = ref<EmployeeSalary | null>(null)
+const payroll = ref<PayrollHome | null>(null)
 const loading = ref(true)
 const errorTitle = ref('')
 const error = ref('')
 const saveError = ref('')
 const saveStatus = ref('')
-const salaryError = ref('')
-const salaryStatus = ref('')
-const salaryHidden = ref(false)
-const salaryMissing = ref(false)
-const savingSalary = ref(false)
-const salaryDraftWage = ref('')
-const salaryDraftRates = reactive<Record<string, string>>({})
-const salaryDraftAmounts = reactive<Record<string, string>>({})
 const tab = ref('personal')
 const editing = ref(false)
 const saving = ref(false)
-const controlActionsReady = ref(false)
-const currentPassword = ref('')
-const newPassword = ref('')
-const passwordError = ref('')
-const passwordStatus = ref('')
-const savingPassword = ref(false)
 const draft = reactive<Draft>({
   first_name: '',
   last_name: '',
@@ -107,16 +72,6 @@ const draft = reactive<Draft>({
   department: '',
   employment_type: '',
   location: '',
-  date_of_birth: '',
-  nationality: '',
-  gender: '',
-  marital_status: '',
-  personal_email: '',
-  bank_account_number: '',
-  bank_name: '',
-  ifsc: '',
-  pan: '',
-  uan: '',
 })
 
 const allowedFields = computed(() => (session.isHr ? HR_FIELDS : EMPLOYEE_FIELDS))
@@ -132,16 +87,6 @@ function snapshotFrom(row: EmployeeSummary): Draft {
     department: row.department ?? '',
     employment_type: row.employment_type ?? '',
     location: row.location ?? '',
-    date_of_birth: row.date_of_birth ?? '',
-    nationality: row.nationality ?? '',
-    gender: row.gender ?? '',
-    marital_status: row.marital_status ?? '',
-    personal_email: row.personal_email ?? '',
-    bank_account_number: row.bank_account_number ?? '',
-    bank_name: row.bank_name ?? '',
-    ifsc: row.ifsc ?? '',
-    pan: row.pan ?? '',
-    uan: row.uan ?? '',
   }
 }
 
@@ -150,65 +95,26 @@ function applyDraft(row: EmployeeSummary) {
 }
 
 const baseline = computed(() => (person.value ? snapshotFrom(person.value) : null))
-
 const dirtyKeys = computed<(keyof Draft)[]>(() => {
   if (!baseline.value) return []
-  return (Object.keys(draft) as (keyof Draft)[]).filter((key) => draft[key] !== baseline.value![key])
+  return (Object.keys(draft) as (keyof Draft)[]).filter(
+    (key) => draft[key] !== baseline.value![key],
+  )
 })
-
 const dirty = computed(() => dirtyKeys.value.length > 0)
-
 const displayName = computed(() =>
-  person.value ? `${person.value.first_name} ${person.value.last_name}` : 'Profile',
+  person.value ? `${person.value.first_name} ${person.value.last_name}` : 'Employee profile',
 )
-
-const pageHeading = computed(() =>
-  errorTitle.value === 'Access denied' ? 'Access denied' : displayName.value,
+const initials = computed(() =>
+  person.value
+    ? `${person.value.first_name.charAt(0)}${person.value.last_name.charAt(0)}`.toUpperCase()
+    : '',
 )
-
-const isSelf = computed(
-  () => Boolean(session.user?.employee_id) && session.user?.employee_id === person.value?.id,
-)
-
-const canViewPrivate = computed(() => session.isHr || isSelf.value)
-
-function calculationLabel(type: string): string {
-  if (type === 'PERCENT_OF_WAGE') return '% of wage'
-  if (type === 'PERCENT_OF_BASIC') return '% of Basic'
-  if (type === 'REMAINDER') return 'Remainder'
-  return 'Fixed amount'
-}
-
-function lineStatus(line: SalaryLine): string {
-  if (line.kind === 'EMPLOYER') return 'Employer contribution'
-  if (line.kind === 'DEDUCTION') return 'Deduction'
-  if (!line.editable) return 'Computed'
-  return 'Editable'
-}
-
-function applySalaryDraft(row: EmployeeSalary) {
-  salaryDraftWage.value = row.monthly_wage
-  for (const key of Object.keys(salaryDraftRates)) delete salaryDraftRates[key]
-  for (const key of Object.keys(salaryDraftAmounts)) delete salaryDraftAmounts[key]
-  for (const line of row.lines) {
-    if (line.calculation_type === 'FIXED') salaryDraftAmounts[line.code] = line.amount
-    else if (line.rate != null) salaryDraftRates[line.code] = line.rate
-  }
-}
-
-const useIdentityColumn = computed(() => !session.isHr)
-
-const profileInitials = computed(() => {
-  if (!person.value) return ''
-  const first = person.value.first_name.trim().charAt(0)
-  const last = person.value.last_name.trim().charAt(0)
-  return `${first}${last}`.toUpperCase() || person.value.employee_code.slice(0, 2).toUpperCase()
-})
-
-const roleLabel = computed(() => {
-  if (person.value?.role === 'HR') return 'HR'
-  if (person.value?.role === 'EMPLOYEE') return 'Employee'
-  return person.value?.role ?? null
+const salaryRecord = computed(() => {
+  const records = payroll.value?.records ?? []
+  if (!person.value) return undefined
+  if (!session.isHr) return records[0]
+  return records.find((row) => row.employee_id === person.value?.id)
 })
 
 function canEdit(field: keyof Draft): boolean {
@@ -222,35 +128,15 @@ async function load() {
   saveError.value = ''
   saveStatus.value = ''
   person.value = null
-  salary.value = null
-  salaryHidden.value = false
-  salaryMissing.value = false
-  salaryError.value = ''
-  salaryStatus.value = ''
-  passwordError.value = ''
-  passwordStatus.value = ''
-  currentPassword.value = ''
-  newPassword.value = ''
+  payroll.value = null
   editing.value = false
+  tab.value = 'personal'
   const employeeId = String(route.params.employeeId)
   try {
     const row = await api<EmployeeSummary>(`/api/employees/${employeeId}`)
     person.value = row
     applyDraft(row)
-    try {
-      const breakdown = await api<EmployeeSalary>(`/api/payroll/employees/${employeeId}/salary`)
-      salary.value = breakdown
-      applySalaryDraft(breakdown)
-    } catch (err) {
-      if (err instanceof HttpError && err.status === 403) {
-        salaryHidden.value = true
-      } else if (err instanceof HttpError && err.status === 404) {
-        salaryMissing.value = true
-        salaryDraftWage.value = '50000.00'
-      } else {
-        salaryError.value = err instanceof HttpError ? err.detail : 'Could not load salary.'
-      }
-    }
+    payroll.value = await api<PayrollHome>('/api/payroll').catch(() => null)
   } catch (err) {
     if (err instanceof HttpError && err.status === 403) {
       errorTitle.value = 'Access denied'
@@ -269,9 +155,9 @@ async function save() {
   saving.value = true
   saveError.value = ''
   saveStatus.value = ''
-  const payload: Record<string, string | null> = {}
+  const payload: Record<string, string> = {}
   for (const key of dirtyKeys.value) {
-    if (allowedFields.value.has(key)) payload[key] = draft[key] === '' ? null : draft[key]
+    if (allowedFields.value.has(key)) payload[key] = draft[key]
   }
   try {
     person.value = await api<EmployeeSummary>(`/api/employees/${person.value.id}`, {
@@ -288,62 +174,10 @@ async function save() {
   }
 }
 
-async function saveSalary() {
-  if (!person.value || !session.isHr) return
-  savingSalary.value = true
-  salaryError.value = ''
-  salaryStatus.value = ''
-  const components = (salary.value?.lines ?? [])
-    .filter((line) => line.editable)
-    .map((line) =>
-      line.calculation_type === 'FIXED'
-        ? { code: line.code, calculation_type: line.calculation_type, amount: salaryDraftAmounts[line.code] ?? line.amount }
-        : { code: line.code, calculation_type: line.calculation_type, rate: salaryDraftRates[line.code] ?? line.rate },
-    )
-  try {
-    const breakdown = await api<EmployeeSalary>(`/api/payroll/employees/${person.value.id}/salary`, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        monthly_wage: salaryDraftWage.value,
-        components,
-      }),
-    })
-    salary.value = breakdown
-    salaryMissing.value = false
-    applySalaryDraft(breakdown)
-    salaryStatus.value = 'Salary saved.'
-  } catch (err) {
-    salaryError.value = err instanceof HttpError ? err.detail : 'Could not save salary.'
-  } finally {
-    savingSalary.value = false
-  }
-}
-
-async function changePassword() {
-  savingPassword.value = true
-  passwordError.value = ''
-  passwordStatus.value = ''
-  try {
-    const result = await api<{ detail: string }>('/api/auth/change-password', {
-      method: 'POST',
-      body: JSON.stringify({
-        current_password: currentPassword.value,
-        new_password: newPassword.value,
-      }),
-    })
-    currentPassword.value = ''
-    newPassword.value = ''
-    passwordStatus.value = result.detail
-  } catch (err) {
-    passwordError.value = err instanceof HttpError ? err.detail : 'Could not change password.'
-  } finally {
-    savingPassword.value = false
-  }
-}
-
 function startEdit() {
   if (!person.value) return
   applyDraft(person.value)
+  saveStatus.value = ''
   editing.value = true
 }
 
@@ -353,11 +187,6 @@ function cancelEdit() {
   saveError.value = ''
   saveStatus.value = ''
 }
-
-onMounted(async () => {
-  await nextTick()
-  controlActionsReady.value = Boolean(document.getElementById('control-actions'))
-})
 
 watch(
   () => route.params.employeeId,
@@ -369,381 +198,541 @@ watch(
 </script>
 
 <template>
-  <section class="sheet employee-profile">
-    <Teleport v-if="controlActionsReady && person" defer to="#control-actions">
-      <div class="flex flex-wrap items-center gap-2">
-        <StatusBadge
-          v-if="dirty"
-          label="Unsaved changes"
-          :tone="statusTone('Unsaved changes')"
-        />
-        <Button v-if="!editing" type="button" @click="startEdit">Edit</Button>
-        <Button v-if="editing" type="button" variant="secondary" @click="cancelEdit">Discard</Button>
-        <Button v-if="editing" type="button" :disabled="!dirty || saving" @click="save">Save</Button>
-      </div>
-    </Teleport>
-
-    <p v-if="loading">Loading profile…</p>
+  <section class="sheet profile-sheet">
+    <div v-if="loading" class="profile-loading" role="status">Loading profile…</div>
     <Alert v-else-if="error" variant="destructive">
       <AlertTitle>{{ errorTitle || 'Error' }}</AlertTitle>
       <AlertDescription>{{ error }}</AlertDescription>
-      <h1 class="sr-only">{{ pageHeading }}</h1>
     </Alert>
-
-    <div v-else-if="person" class="grid gap-4">
-      <div
-        v-if="!controlActionsReady"
-        class="flex flex-wrap items-center justify-end gap-2 border-b border-[#DEE2E6] pb-3"
-      >
-        <StatusBadge
-          v-if="dirty"
-          label="Unsaved changes"
-          :tone="statusTone('Unsaved changes')"
-        />
-        <Button v-if="!editing" type="button" @click="startEdit">Edit</Button>
-        <Button v-if="editing" type="button" variant="secondary" @click="cancelEdit">Discard</Button>
-        <Button v-if="editing" type="button" :disabled="!dirty || saving" @click="save">Save</Button>
+    <template v-else-if="person">
+      <div class="profile-actions">
+        <Button
+          v-if="session.isHr"
+          type="button"
+          variant="ghost"
+          size="sm"
+          @click="router.push('/employees')"
+        >
+          <ArrowLeftIcon class="size-4" aria-hidden="true" />
+          People
+        </Button>
+        <span v-else></span>
+        <div class="action-group">
+          <StatusBadge v-if="dirty" label="Unsaved changes" :tone="statusTone('Unsaved changes')" />
+          <Button v-if="!editing" type="button" variant="outline" @click="startEdit">
+            {{ session.isHr ? 'Edit employee' : 'Edit profile' }}
+          </Button>
+          <Button v-if="editing" type="button" variant="secondary" @click="cancelEdit"
+            >Discard</Button
+          >
+          <Button v-if="editing" type="button" :disabled="!dirty || saving" @click="save">
+            {{ saving ? 'Saving…' : 'Save' }}
+          </Button>
+        </div>
       </div>
 
-      <p v-if="saveError" role="alert">{{ saveError }}</p>
-      <p v-if="saveStatus" class="feedback-success" role="status">{{ saveStatus }}</p>
-
-      <!-- HR: identity header strip -->
-      <header
-        v-if="!useIdentityColumn"
-        class="identity-header flex flex-wrap items-start gap-4 border-b border-[#DEE2E6] pb-4"
-      >
-        <Avatar size="lg" class="size-16 bg-[#F8F9FA] text-base font-medium text-[#495057]">
-          <AvatarFallback>{{ profileInitials }}</AvatarFallback>
-        </Avatar>
-        <div class="min-w-0 flex-1">
-          <h1 class="m-0 text-[24px] leading-[1.4] font-bold text-[#212529] sm:text-[28px]">
-            {{ displayName }}
-          </h1>
-          <p class="m-0 mt-1 text-sm text-[#495057]">
-            {{ person.employee_code }}
-            <span v-if="roleLabel"> · {{ roleLabel }}</span>
-            <span v-if="person.title"> · {{ person.title }}</span>
+      <header class="profile-identity">
+        <span class="profile-avatar" aria-hidden="true">{{ initials }}</span>
+        <div class="identity-copy">
+          <h1>{{ displayName }}</h1>
+          <p>
+            <span>{{ person.employee_code }}</span>
+            <span aria-hidden="true">·</span>
+            <span>{{ person.title ?? 'Title not set' }}</span>
           </p>
-          <div class="mt-2 flex flex-wrap items-center gap-2">
-            <StatusBadge
-              :label="employeeStatusLabel(draft.status)"
-              :tone="statusTone(employeeStatusLabel(draft.status))"
-            />
-          </div>
-          <ul class="identity-facts mt-3 grid gap-1.5 text-sm text-[#495057]">
-            <li v-if="person.email" class="flex items-center gap-2">
-              <MailIcon class="size-4 shrink-0" :stroke-width="1.75" aria-hidden="true" />
-              <span>{{ person.email }}</span>
-            </li>
-            <li v-if="draft.phone" class="flex items-center gap-2">
-              <PhoneIcon class="size-4 shrink-0" :stroke-width="1.75" aria-hidden="true" />
-              <span>{{ draft.phone }}</span>
-            </li>
-            <li v-if="draft.location || draft.address" class="flex items-center gap-2">
-              <MapPinIcon class="size-4 shrink-0" :stroke-width="1.75" aria-hidden="true" />
-              <span>{{ draft.location || draft.address }}</span>
-            </li>
-          </ul>
+          <StatusBadge
+            :label="employeeStatusLabel(draft.status)"
+            :tone="statusTone(employeeStatusLabel(draft.status))"
+          />
         </div>
+        <dl class="identity-facts">
+          <div>
+            <dt><MailIcon aria-hidden="true" /> Work email</dt>
+            <dd>{{ person.email ?? 'Not provided' }}</dd>
+          </div>
+          <div>
+            <dt><MapPinIcon aria-hidden="true" /> Location</dt>
+            <dd>{{ draft.location || 'Not provided' }}</dd>
+          </div>
+        </dl>
       </header>
 
-      <div
-        class="profile-body"
-        :class="useIdentityColumn ? 'profile-body--column' : 'profile-body--header'"
-      >
-        <!-- Employee: identity side column -->
-        <aside v-if="useIdentityColumn" class="identity-column">
-          <Avatar size="lg" class="size-20 bg-[#F8F9FA] text-lg font-medium text-[#495057]">
-            <AvatarFallback>{{ profileInitials }}</AvatarFallback>
-          </Avatar>
-          <h1 class="m-0 mt-3 text-[21px] leading-[1.4] font-bold text-[#212529]">
-            {{ displayName }}
-          </h1>
-          <p class="m-0 mt-1 text-sm text-[#495057]">{{ person.employee_code }}</p>
-          <div class="mt-2">
-            <StatusBadge
-              :label="employeeStatusLabel(draft.status)"
-              :tone="statusTone(employeeStatusLabel(draft.status))"
-            />
-          </div>
-          <ul class="identity-facts mt-4 grid gap-2 text-sm text-[#495057]">
-            <li v-if="person.email" class="flex items-start gap-2">
-              <MailIcon class="mt-0.5 size-4 shrink-0" :stroke-width="1.75" aria-hidden="true" />
-              <span class="min-w-0 break-words">{{ person.email }}</span>
-            </li>
-            <li v-if="draft.phone" class="flex items-start gap-2">
-              <PhoneIcon class="mt-0.5 size-4 shrink-0" :stroke-width="1.75" aria-hidden="true" />
-              <span class="min-w-0 break-words">{{ draft.phone }}</span>
-            </li>
-            <li v-if="draft.location || draft.address" class="flex items-start gap-2">
-              <MapPinIcon class="mt-0.5 size-4 shrink-0" :stroke-width="1.75" aria-hidden="true" />
-              <span class="min-w-0 break-words">{{ draft.location || draft.address }}</span>
-            </li>
-          </ul>
-        </aside>
+      <form @submit.prevent="save">
+        <p v-if="saveError" class="feedback-error" role="alert">{{ saveError }}</p>
+        <p v-if="saveStatus" class="feedback-success" role="status">{{ saveStatus }}</p>
 
-        <div class="profile-tabs min-w-0">
-          <Tabs v-model="tab">
-            <TabsList class="h-auto w-full justify-start overflow-x-auto">
-              <TabsTrigger value="personal" @click="tab = 'personal'">Personal</TabsTrigger>
-              <TabsTrigger value="job" @click="tab = 'job'">Job</TabsTrigger>
-              <TabsTrigger v-if="canViewPrivate" value="private" @click="tab = 'private'">Private</TabsTrigger>
-              <TabsTrigger v-if="canViewPrivate" value="bank" @click="tab = 'bank'">Bank</TabsTrigger>
-              <TabsTrigger value="salary" @click="tab = 'salary'">Salary</TabsTrigger>
-              <TabsTrigger value="documents" @click="tab = 'documents'">Documents</TabsTrigger>
-              <TabsTrigger v-if="isSelf" value="security" @click="tab = 'security'">Security</TabsTrigger>
-            </TabsList>
-            <TabsContent value="personal" class="grid max-w-xl gap-[5px] pt-4">
-              <label class="grid gap-1 text-sm font-medium">
+        <Tabs v-model="tab" class="profile-tabs">
+          <TabsList class="profile-tab-list">
+            <TabsTrigger value="personal" @click="tab = 'personal'">Personal</TabsTrigger>
+            <TabsTrigger value="job" @click="tab = 'job'">Job</TabsTrigger>
+            <TabsTrigger value="salary" @click="tab = 'salary'">Salary</TabsTrigger>
+            <TabsTrigger value="documents" @click="tab = 'documents'">Documents</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="personal" class="tab-panel">
+            <div class="panel-heading">
+              <PhoneIcon aria-hidden="true" />
+              <div>
+                <h2>Personal details</h2>
+                <p>
+                  {{
+                    session.isHr
+                      ? 'Identity and contact information.'
+                      : 'You can update your phone and address.'
+                  }}
+                </p>
+              </div>
+            </div>
+            <div class="record-grid">
+              <label>
                 Employee code
                 <Input :model-value="person.employee_code" disabled />
               </label>
-              <label class="grid gap-1 text-sm font-medium">
-                First name
-                <Input v-model="draft.first_name" :disabled="!canEdit('first_name')" />
-              </label>
-              <label class="grid gap-1 text-sm font-medium">
-                Last name
-                <Input v-model="draft.last_name" :disabled="!canEdit('last_name')" />
-              </label>
-              <label class="grid gap-1 text-sm font-medium">
+              <label>
                 Work email
                 <Input :model-value="person.email ?? 'Not provided'" type="email" disabled />
               </label>
-              <label class="grid gap-1 text-sm font-medium">
+              <label>
+                First name
+                <Input v-model="draft.first_name" :disabled="!canEdit('first_name')" />
+              </label>
+              <label>
+                Last name
+                <Input v-model="draft.last_name" :disabled="!canEdit('last_name')" />
+              </label>
+              <label>
                 Phone
                 <Input v-model="draft.phone" :disabled="!canEdit('phone')" />
               </label>
-              <label class="grid gap-1 text-sm font-medium">
+              <label class="wide-field">
                 Address
                 <Textarea v-model="draft.address" :disabled="!canEdit('address')" />
               </label>
-              <label class="grid gap-1 text-sm font-medium">
+              <label v-if="session.isHr && editing">
                 Employment status
-                <NativeSelect v-model="draft.status" class="w-full" :disabled="!canEdit('status')">
+                <NativeSelect v-model="draft.status" class="w-full">
                   <NativeSelectOption value="ACTIVE">Active</NativeSelectOption>
                   <NativeSelectOption value="INVITED">Invited</NativeSelectOption>
                   <NativeSelectOption value="INACTIVE">Inactive</NativeSelectOption>
                 </NativeSelect>
               </label>
-              <p class="text-sm text-[#495057]">
-                Status
-                <StatusBadge
-                  :label="employeeStatusLabel(draft.status)"
-                  :tone="statusTone(employeeStatusLabel(draft.status))"
-                />
-              </p>
-            </TabsContent>
-            <TabsContent v-if="canViewPrivate" value="private" class="grid max-w-xl gap-[5px] pt-4">
-              <label class="grid gap-1 text-sm font-medium">
-                Date of birth
-                <Input v-model="draft.date_of_birth" type="date" :disabled="!canEdit('date_of_birth')" />
-              </label>
-              <label class="grid gap-1 text-sm font-medium">
-                Nationality
-                <Input v-model="draft.nationality" :disabled="!canEdit('nationality')" />
-              </label>
-              <label class="grid gap-1 text-sm font-medium">
-                Gender
-                <NativeSelect v-model="draft.gender" class="w-full" :disabled="!canEdit('gender')">
-                  <NativeSelectOption value="">Not provided</NativeSelectOption>
-                  <NativeSelectOption value="MALE">Male</NativeSelectOption>
-                  <NativeSelectOption value="FEMALE">Female</NativeSelectOption>
-                  <NativeSelectOption value="OTHER">Other</NativeSelectOption>
-                  <NativeSelectOption value="PREFER_NOT_TO_SAY">Prefer not to say</NativeSelectOption>
-                </NativeSelect>
-              </label>
-              <label class="grid gap-1 text-sm font-medium">
-                Marital status
-                <NativeSelect v-model="draft.marital_status" class="w-full" :disabled="!canEdit('marital_status')">
-                  <NativeSelectOption value="">Not provided</NativeSelectOption>
-                  <NativeSelectOption value="SINGLE">Single</NativeSelectOption>
-                  <NativeSelectOption value="MARRIED">Married</NativeSelectOption>
-                  <NativeSelectOption value="DIVORCED">Divorced</NativeSelectOption>
-                  <NativeSelectOption value="WIDOWED">Widowed</NativeSelectOption>
-                  <NativeSelectOption value="OTHER">Other</NativeSelectOption>
-                </NativeSelect>
-              </label>
-              <label class="grid gap-1 text-sm font-medium">
-                Personal email
-                <Input v-model="draft.personal_email" type="email" :disabled="!canEdit('personal_email')" />
-              </label>
-            </TabsContent>
-            <TabsContent v-if="canViewPrivate" value="bank" class="grid max-w-xl gap-[5px] pt-4">
-              <label class="grid gap-1 text-sm font-medium">
-                Bank account number
-                <Input v-model="draft.bank_account_number" :disabled="!canEdit('bank_account_number')" />
-              </label>
-              <label class="grid gap-1 text-sm font-medium">
-                Bank name
-                <Input v-model="draft.bank_name" :disabled="!canEdit('bank_name')" />
-              </label>
-              <label class="grid gap-1 text-sm font-medium">
-                IFSC
-                <Input v-model="draft.ifsc" :disabled="!canEdit('ifsc')" />
-              </label>
-              <label class="grid gap-1 text-sm font-medium">
-                PAN
-                <Input v-model="draft.pan" :disabled="!canEdit('pan')" />
-              </label>
-              <label class="grid gap-1 text-sm font-medium">
-                UAN
-                <Input v-model="draft.uan" :disabled="!canEdit('uan')" />
-              </label>
-            </TabsContent>
-            <TabsContent value="job" class="grid max-w-xl gap-[5px] pt-4">
-              <label class="grid gap-1 text-sm font-medium">
+            </div>
+          </TabsContent>
+
+          <TabsContent value="job" class="tab-panel">
+            <div class="panel-heading">
+              <BriefcaseBusinessIcon aria-hidden="true" />
+              <div>
+                <h2>Job details</h2>
+                <p>Current role and workplace information.</p>
+              </div>
+            </div>
+            <div class="record-grid">
+              <label>
                 Title
                 <Input v-model="draft.title" :disabled="!canEdit('title')" />
               </label>
-              <label class="grid gap-1 text-sm font-medium">
+              <label>
                 Department
                 <Input v-model="draft.department" :disabled="!canEdit('department')" />
               </label>
-              <label class="grid gap-1 text-sm font-medium">
+              <label>
                 Employment type
-                <Input
-                  v-if="canEdit('employment_type')"
-                  v-model="draft.employment_type"
-                />
+                <Input v-if="canEdit('employment_type')" v-model="draft.employment_type" />
                 <Input v-else :model-value="formatEnumLabel(draft.employment_type)" disabled />
               </label>
-              <label class="grid gap-1 text-sm font-medium">
+              <label>
                 Location
                 <Input v-model="draft.location" :disabled="!canEdit('location')" />
               </label>
-              <label class="grid gap-1 text-sm font-medium">
+              <label>
                 Joined on
                 <Input :model-value="formatDate(person.joined_on)" disabled />
               </label>
-            </TabsContent>
-            <TabsContent value="salary" class="grid gap-3 pt-4">
-              <p v-if="salaryError" role="alert">{{ salaryError }}</p>
-              <p v-if="salaryStatus" class="feedback-success" role="status">{{ salaryStatus }}</p>
-              <p v-if="salaryHidden">Salary is hidden.</p>
-              <template v-else-if="salary || (session.isHr && salaryMissing)">
-                <p class="m-0 text-[#495057]">
+              <label>
+                Role
+                <Input :model-value="person.role === 'HR' ? 'HR officer' : 'Employee'" disabled />
+              </label>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="salary" class="tab-panel">
+            <div class="panel-heading">
+              <BanknoteIcon aria-hidden="true" />
+              <div>
+                <h2>Salary</h2>
+                <p>
                   {{
                     session.isHr
-                      ? 'HR sets monthly wage and editable rates. Remainder, PF, and professional tax are computed.'
-                      : 'Computed monthly breakdown. Coworker salary stays hidden.'
+                      ? 'Latest payroll record for this employee.'
+                      : 'Your latest published payroll record.'
                   }}
                 </p>
-                <label class="grid max-w-xs gap-1 text-sm font-medium">
-                  Monthly wage
-                  <Input v-model="salaryDraftWage" inputmode="decimal" :disabled="!session.isHr" />
-                </label>
-                <p v-if="salary" class="m-0">
-                  Net {{ formatCurrency(salary.currency, salary.net_amount) }}
-                  <StatusBadge label="Computed" :tone="statusTone('Computed')" />
+              </div>
+            </div>
+            <div v-if="salaryRecord" class="salary-record">
+              <div>
+                <span>Net pay</span>
+                <strong>{{
+                  formatCurrency(salaryRecord.currency, salaryRecord.net_amount)
+                }}</strong>
+              </div>
+              <StatusBadge
+                :label="salaryRecord.published_at ? 'Published' : 'Draft'"
+                :tone="statusTone(salaryRecord.published_at ? 'Published' : 'Draft')"
+              />
+            </div>
+            <div v-else class="inline-empty">
+              <BanknoteIcon aria-hidden="true" />
+              <div>
+                <h3>No payroll record</h3>
+                <p>
+                  {{
+                    session.isHr
+                      ? 'Set up this employee in Payroll.'
+                      : 'No payslip has been published for this period.'
+                  }}
                 </p>
-                <Table v-if="salary">
-                  <TableCaption class="sr-only">Salary structure</TableCaption>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Component</TableHead>
-                      <TableHead>Basis</TableHead>
-                      <TableHead>Input</TableHead>
-                      <TableHead>Amount</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    <TableRow v-for="line in salary.lines" :key="line.code">
-                      <TableCell>{{ line.name }}</TableCell>
-                      <TableCell>{{ calculationLabel(line.calculation_type) }}</TableCell>
-                      <TableCell>
-                        <label
-                          v-if="session.isHr && line.editable && line.calculation_type === 'FIXED'"
-                          class="grid gap-1 text-sm font-medium"
-                        >
-                          {{ line.code }} amount
-                          <Input v-model="salaryDraftAmounts[line.code]" inputmode="decimal" />
-                        </label>
-                        <label
-                          v-else-if="session.isHr && line.editable"
-                          class="grid gap-1 text-sm font-medium"
-                        >
-                          {{ line.code }} rate
-                          <Input v-model="salaryDraftRates[line.code]" inputmode="decimal" />
-                        </label>
-                        <span v-else>{{ line.rate ?? '—' }}</span>
-                      </TableCell>
-                      <TableCell>{{ formatCurrency(salary.currency, line.amount) }}</TableCell>
-                      <TableCell>
-                        <StatusBadge :label="lineStatus(line)" :tone="statusTone(lineStatus(line))" />
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-                <Button v-if="session.isHr" type="button" :disabled="savingSalary" @click="saveSalary">
-                  Save salary
-                </Button>
-              </template>
-              <p v-else>No salary configured.</p>
-            </TabsContent>
-            <TabsContent value="documents" class="grid gap-3 pt-4">
+              </div>
+            </div>
+            <p class="panel-note">
+              {{
+                session.isHr
+                  ? 'Edit salary inputs in Payroll before finalizing the period.'
+                  : 'Salary details are read-only.'
+              }}
+            </p>
+          </TabsContent>
+
+          <TabsContent value="documents" class="tab-panel">
+            <div class="panel-heading">
+              <FileTextIcon aria-hidden="true" />
+              <div>
+                <h2>Documents</h2>
+                <p>Employment records linked to this profile.</p>
+              </div>
+            </div>
+            <div class="inline-empty">
+              <FileTextIcon aria-hidden="true" />
+              <div>
+                <h3>Documents are not available yet</h3>
+                <p>Private document access will appear here when uploads are enabled.</p>
+              </div>
               <StatusBadge label="Missing document" :tone="statusTone('Missing document')" />
-              <p>
-                Document uploads are not available yet. HR and employees will access private documents here when enabled.
-              </p>
-            </TabsContent>
-            <TabsContent v-if="isSelf" value="security" class="grid max-w-xl gap-[5px] pt-4">
-              <form class="grid gap-[5px]" @submit.prevent="changePassword">
-                <p v-if="passwordError" role="alert">{{ passwordError }}</p>
-                <p v-if="passwordStatus" class="feedback-success" role="status">{{ passwordStatus }}</p>
-                <label class="grid gap-1 text-sm font-medium">
-                  Current password
-                  <Input v-model="currentPassword" type="password" autocomplete="current-password" />
-                </label>
-                <label class="grid gap-1 text-sm font-medium">
-                  New password
-                  <Input v-model="newPassword" type="password" autocomplete="new-password" />
-                </label>
-                <Button type="submit" :disabled="savingPassword || !currentPassword || !newPassword">
-                  Change password
-                </Button>
-              </form>
-            </TabsContent>
-          </Tabs>
-        </div>
-      </div>
-    </div>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </form>
+    </template>
   </section>
 </template>
 
 <style scoped>
-.profile-body--column {
-  display: grid;
-  gap: 1.5rem;
+.profile-sheet {
+  padding: 0;
 }
 
-@media (min-width: 768px) {
-  .profile-body--column {
-    grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
-    align-items: start;
-  }
+.profile-loading {
+  padding: 2rem 1.25rem;
+  color: #495057;
 }
 
-.identity-column {
-  min-width: 0;
-  padding-bottom: 1rem;
+.profile-actions {
+  display: flex;
+  min-height: 3.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 1.25rem;
   border-bottom: 1px solid #dee2e6;
+  background: #f8f9fa;
 }
 
-@media (min-width: 768px) {
-  .identity-column {
-    border-bottom: none;
-    border-right: 1px solid #dee2e6;
-    padding-bottom: 0;
-    padding-right: 1.5rem;
-  }
+.action-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.profile-identity {
+  display: grid;
+  grid-template-columns: auto minmax(14rem, 1fr) minmax(19rem, 0.8fr);
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1.6rem 1.5rem;
+}
+
+.profile-avatar {
+  display: grid;
+  width: 5rem;
+  height: 5rem;
+  place-items: center;
+  border: 1px solid #ded5dc;
+  border-radius: 50%;
+  background: #f2edf1;
+  color: #714b67;
+  font-size: 1.65rem;
+  font-weight: 700;
+}
+
+.identity-copy h1 {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.25;
+}
+
+.identity-copy p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.25rem 0 0.55rem;
+  color: #495057;
 }
 
 .identity-facts {
+  display: grid;
+  gap: 0.75rem;
   margin: 0;
-  padding: 0;
-  list-style: none;
+  padding-left: 1.25rem;
+  border-left: 1px solid #dee2e6;
+}
+
+.identity-facts div {
+  min-width: 0;
+}
+
+.identity-facts dt {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #495057;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.identity-facts dt svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.identity-facts dd {
+  margin: 0.15rem 0 0 1.35rem;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+
+.profile-tabs {
+  border-top: 1px solid #dee2e6;
+}
+
+.profile-tab-list {
+  width: 100%;
+  height: auto;
+  justify-content: flex-start;
+  overflow-x: auto;
+  border-radius: 0;
+  border-bottom: 1px solid #dee2e6;
+  background: #fff;
+  padding: 0 1.25rem;
+}
+
+.profile-tab-list button {
+  min-height: 2.8rem;
+  border-radius: 0;
+}
+
+.tab-panel {
+  margin: 0;
+  padding: 1.5rem;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  margin-bottom: 1.25rem;
+}
+
+.panel-heading > svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-top: 0.2rem;
+  color: #714b67;
+}
+
+.panel-heading h2,
+.panel-heading p,
+.inline-empty h3,
+.inline-empty p {
+  margin: 0;
+}
+
+.panel-heading h2 {
+  font-size: 18px;
+}
+
+.panel-heading p,
+.panel-note,
+.inline-empty p {
+  color: #495057;
+}
+
+.record-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 2rem;
+  row-gap: 1rem;
+  max-width: 64rem;
+}
+
+.record-grid label {
+  display: grid;
+  gap: 0.3rem;
+  color: #495057;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.record-grid input:disabled,
+.record-grid textarea:disabled {
+  border-color: #e6e8ea;
+  background: #f8f9fa;
+  color: #212529;
+  opacity: 1;
+}
+
+.wide-field {
+  grid-column: 1 / -1;
+}
+
+.salary-record {
+  display: flex;
+  max-width: 40rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 0;
+  border-top: 1px solid #dee2e6;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.salary-record span,
+.salary-record strong {
+  display: block;
+}
+
+.salary-record div > span {
+  color: #495057;
+  font-size: 13px;
+}
+
+.salary-record strong {
+  margin-top: 0.2rem;
+  font-size: 21px;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-note {
+  margin: 1rem 0 0;
+}
+
+.inline-empty {
+  display: flex;
+  max-width: 48rem;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 1rem;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  background: #f8f9fa;
+}
+
+.inline-empty > svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: 0 0 auto;
+  color: #495057;
+}
+
+.inline-empty > :last-child {
+  margin-left: auto;
+}
+
+.feedback-error,
+.feedback-success {
+  margin: 1rem 1.25rem 0;
+}
+
+@media (max-width: 760px) {
+  .profile-identity {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    padding: 1.25rem 1rem;
+  }
+
+  .profile-avatar {
+    width: 3.75rem;
+    height: 3.75rem;
+    font-size: 1.25rem;
+  }
+
+  .identity-copy h1 {
+    font-size: 24px;
+  }
+
+  .identity-facts {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 1rem 0 0;
+    border-top: 1px solid #dee2e6;
+    border-left: 0;
+  }
+
+  .identity-facts dd {
+    margin-left: 0;
+  }
+
+  .record-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wide-field {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 520px) {
+  .profile-actions,
+  .directory-footer {
+    align-items: flex-start;
+  }
+
+  .profile-actions {
+    padding-inline: 0.75rem;
+  }
+
+  .action-group {
+    flex: 1;
+  }
+
+  .profile-tab-list,
+  .tab-panel {
+    padding-inline: 1rem;
+  }
+
+  .identity-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .inline-empty {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .inline-empty > :last-child {
+    margin-left: 0;
+  }
 }
 </style>

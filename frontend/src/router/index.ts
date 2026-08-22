@@ -13,12 +13,6 @@ const router = createRouter({
       meta: { public: true, title: 'Sign in' },
     },
     {
-      path: '/activate-account',
-      name: 'activate-account',
-      component: () => import('@/views/ActivateAccountView.vue'),
-      meta: { public: true, title: 'Activate account' },
-    },
-    {
       path: '/',
       component: () => import('@/layouts/AppShell.vue'),
       children: [
