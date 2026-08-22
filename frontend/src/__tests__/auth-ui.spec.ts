@@ -221,7 +221,7 @@ describe('ActivateAccountView', () => {
         token: 'invite-token-1',
         password: 'ChangeMe_Emp12!',
       })
-      return jsonResponse(410, { detail: 'Invite has expired.' })
+      return jsonResponse(400, { detail: 'This invite has expired.' })
     })
 
     const { wrapper } = await mountView(ActivateAccountView, '/activate-account')
@@ -235,7 +235,9 @@ describe('ActivateAccountView', () => {
   })
 
   it('shows already-used copy when activate-account reports a used invite', async () => {
-    fetchMock.mockImplementation(() => jsonResponse(409, { detail: 'Invite has already been used.' }))
+    fetchMock.mockImplementation(() =>
+      jsonResponse(400, { detail: 'This invite has already been used.' }),
+    )
 
     const { wrapper } = await mountView(ActivateAccountView, '/activate-account')
     await fillValidInvite(wrapper)
@@ -245,6 +247,38 @@ describe('ActivateAccountView', () => {
     expect(wrapper.get('[role="alert"]').text()).toMatch(/already been used|already used/i)
     expect(wrapper.text()).toMatch(/Already used/i)
     expect(wrapper.find('form').exists()).toBe(false)
+  })
+
+  it('still treats 410 expired and 409 used as dedicated screens', async () => {
+    fetchMock.mockImplementation(() => jsonResponse(410, { detail: 'Gone.' }))
+    const expired = await mountView(ActivateAccountView, '/activate-account')
+    await fillValidInvite(expired.wrapper)
+    await expired.wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(expired.wrapper.text()).toMatch(/Invite expired/i)
+    expired.wrapper.unmount()
+
+    fetchMock.mockImplementation(() => jsonResponse(409, { detail: 'Conflict.' }))
+    const used = await mountView(ActivateAccountView, '/activate-account')
+    await fillValidInvite(used.wrapper)
+    await used.wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(used.wrapper.text()).toMatch(/Already used/i)
+    used.wrapper.unmount()
+  })
+
+  it('keeps the form for other 400 activation errors', async () => {
+    fetchMock.mockImplementation(() => jsonResponse(400, { detail: 'Invite is invalid.' }))
+
+    const { wrapper } = await mountView(ActivateAccountView, '/activate-account')
+    await fillValidInvite(wrapper)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.find('form').exists()).toBe(true)
+    expect(wrapper.get('[role="alert"]').text()).toMatch(/Invite is invalid/i)
+    expect(wrapper.text()).not.toMatch(/Invite expired/i)
+    expect(wrapper.text()).not.toMatch(/Already used/i)
   })
 
   it('shows verification-sent copy after a successful activate-account response', async () => {

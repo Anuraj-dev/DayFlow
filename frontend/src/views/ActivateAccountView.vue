@@ -7,6 +7,20 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api, HttpError } from '@/api/client'
 
+function classifyActivateError(err: unknown): 'expired' | 'used' | 'other' {
+  if (!(err instanceof HttpError)) return 'other'
+  const detail = err.detail.toLowerCase()
+  if (err.status === 410 || detail.includes('expired')) return 'expired'
+  if (
+    err.status === 409 ||
+    detail.includes('already been used') ||
+    detail.includes('already been activated')
+  ) {
+    return 'used'
+  }
+  return 'other'
+}
+
 const route = useRoute()
 const employeeCode = ref('')
 const email = ref('')
@@ -34,12 +48,10 @@ async function onSubmit() {
     state.value = 'sent'
     detail.value = payload.detail || 'Check your work email to verify this account.'
   } catch (err) {
-    if (err instanceof HttpError && err.status === 410) {
-      state.value = 'expired'
-      detail.value = err.detail
-    } else if (err instanceof HttpError && err.status === 409) {
-      state.value = 'used'
-      detail.value = err.detail
+    const classified = classifyActivateError(err)
+    if (classified === 'expired' || classified === 'used') {
+      state.value = classified
+      detail.value = err instanceof HttpError ? err.detail : ''
     } else {
       detail.value = err instanceof HttpError ? err.detail : 'Could not activate this invite.'
     }
