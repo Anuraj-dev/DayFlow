@@ -57,3 +57,21 @@ def assert_can_submit(
 def assert_rejection_comment(comment: str | None) -> None:
     if not comment or not comment.strip():
         raise LeaveError("Rejection requires a comment.")
+
+
+def assert_can_cancel(*, current_status: str, is_owner: bool) -> None:
+    if not is_owner:
+        raise LeaveError("Employees can cancel only their own pending requests.")
+    if current_status != LeaveRequestStatus.PENDING.value:
+        raise LeaveError("Only pending leave requests can be cancelled.")
+
+
+def assert_can_review(*, current_status: str, decision: str, comment: str | None) -> str:
+    if current_status != LeaveRequestStatus.PENDING.value:
+        raise LeaveError("This leave request is not pending.")
+    normalized = decision.upper()
+    if normalized not in {LeaveRequestStatus.APPROVED.value, LeaveRequestStatus.REJECTED.value}:
+        raise LeaveError("Decision must be APPROVED or REJECTED.")
+    if normalized == LeaveRequestStatus.REJECTED.value:
+        assert_rejection_comment(comment)
+    return normalized
