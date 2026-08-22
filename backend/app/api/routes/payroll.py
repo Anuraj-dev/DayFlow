@@ -1,27 +1,34 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.adapters.salary import (
+    SalaryComponentPatch,
+    list_org_computed_salaries,
+    load_computed_salary,
+    save_salary_config,
+)
 from app.api.deps import CurrentPrincipal, get_current_principal, require_hr
 from app.core.db import get_db
 from app.domain.payroll import (
+    CalculationType,
+    ComponentKind,
+    ComputedSalary,
     PayrollError,
     PayrollPeriodStatus,
     assert_can_finalize,
     assert_can_publish,
-    assert_mutable,
     signed_line_amount,
-    totals_from_components,
 )
 from app.domain.roles import Role
 from app.models import (
     AuditEvent,
     Employee,
-    EmployeeSalaryComponent,
     Organization,
     PayrollPeriod,
     PayrollRecord,
@@ -29,12 +36,13 @@ from app.models import (
     SalaryComponent,
 )
 from app.schemas.payroll import (
+    EmployeeSalaryInputsOut,
+    EmployeeSalaryOut,
+    EmployeeSalaryPatchRequest,
     PayrollPeriodActionOut,
     PayrollRecordDetailOut,
     PayrollRecordLineOut,
-    SalaryComponentOut,
-    SalaryComponentPatchRequest,
-    SalaryComponentPatchResponse,
+    SalaryLineOut,
 )
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
@@ -49,6 +57,11 @@ def _raise_payroll(exc: PayrollError, *, conflict: bool = False) -> None:
 
 def _money(value: Decimal) -> str:
     return f"{value.quantize(Decimal('0.01'))}"
+
+
+def _org_today(org: Organization | None) -> date:
+    timezone_name = org.timezone if org and org.timezone else "UTC"
+    return datetime.now(UTC).astimezone(ZoneInfo(timezone_name)).date()
 
 
 async def _org_period(db: AsyncSession, organization_id: UUID, period_id: UUID) -> PayrollPeriod:
@@ -75,29 +88,61 @@ async def _org_employee(db: AsyncSession, organization_id: UUID, employee_id: UU
     return employee
 
 
-async def _salary_components_out(
-    db: AsyncSession, organization_id: UUID, employee_id: UUID
-) -> list[SalaryComponentOut]:
-    rows = (
-        await db.execute(
-            select(EmployeeSalaryComponent, SalaryComponent)
-            .join(SalaryComponent, SalaryComponent.id == EmployeeSalaryComponent.salary_component_id)
-            .where(
-                EmployeeSalaryComponent.employee_id == employee_id,
-                SalaryComponent.organization_id == organization_id,
-            )
-            .order_by(SalaryComponent.code)
-        )
-    ).all()
-    return [
-        SalaryComponentOut(
-            code=component.code,
-            name=component.name,
-            kind=component.kind,
-            amount=assignment.amount,
-        )
-        for assignment, component in rows
-    ]
+def _can_read_salary(principal: CurrentPrincipal, employee_id: UUID) -> bool:
+    if principal.role is Role.HR:
+        return True
+    return principal.employee_id is not None and principal.employee_id == employee_id
+
+
+def _line_out(line) -> SalaryLineOut:
+    return SalaryLineOut(
+        code=line.code,
+        name=line.name,
+        kind=line.kind.value if isinstance(line.kind, ComponentKind) else str(line.kind),
+        calculation_type=(
+            line.calculation_type.value
+            if isinstance(line.calculation_type, CalculationType)
+            else str(line.calculation_type)
+        ),
+        rate=line.rate,
+        amount=line.amount,
+        editable=line.editable,
+    )
+
+
+def _salary_out(employee_id: UUID, currency: str, effective_from, computed: ComputedSalary) -> EmployeeSalaryOut:
+    return EmployeeSalaryOut(
+        employee_id=employee_id,
+        monthly_wage=computed.monthly_wage,
+        currency=currency,
+        effective_from=effective_from,
+        gross_amount=computed.gross_amount,
+        deduction_amount=computed.deduction_amount,
+        net_amount=computed.net_amount,
+        employer_amount=computed.employer_amount,
+        lines=[_line_out(line) for line in computed.lines],
+    )
+
+
+def _salary_audit(computed: ComputedSalary, effective_from) -> dict:
+    return {
+        "monthly_wage": _money(computed.monthly_wage),
+        "effective_from": effective_from.isoformat(),
+        "lines": [
+            {
+                "code": line.code,
+                "calculation_type": line.calculation_type.value,
+                "rate": _money(line.rate) if line.rate is not None else None,
+                "amount": _money(line.amount),
+            }
+            for line in computed.lines
+        ],
+    }
+
+
+async def _currency(db: AsyncSession, organization_id: UUID) -> str:
+    org = await db.get(Organization, organization_id)
+    return org.currency if org is not None else "INR"
 
 
 @router.get("")
@@ -125,7 +170,7 @@ async def payroll_home(
                 PayrollRecord.published_at.is_not(None),
             )
     records = list(await db.scalars(records_query))
-    return {
+    payload: dict = {
         "role": principal.role.value,
         "periods": [
             {
@@ -148,89 +193,107 @@ async def payroll_home(
             for record in records
         ],
     }
+    if principal.role is Role.HR:
+        org = await db.get(Organization, principal.organization_id)
+        as_of = _org_today(org)
+        currency = org.currency if org is not None else "INR"
+        salary_inputs: list[EmployeeSalaryInputsOut] = []
+        for employee, _wage, computed in await list_org_computed_salaries(
+            db, principal.organization_id, as_of
+        ):
+            salary_inputs.append(
+                EmployeeSalaryInputsOut(
+                    employee_id=employee.id,
+                    employee_name=f"{employee.first_name} {employee.last_name}",
+                    monthly_wage=computed.monthly_wage,
+                    net_amount=computed.net_amount,
+                    components=[_line_out(line) for line in computed.lines],
+                )
+            )
+        payload["salary_inputs"] = [row.model_dump(mode="json") for row in salary_inputs]
+        payload["currency"] = currency
+    return payload
 
 
-@router.patch("/salary-components", response_model=SalaryComponentPatchResponse)
-async def patch_salary_components(
-    body: SalaryComponentPatchRequest,
+@router.get("/employees/{employee_id}/salary", response_model=EmployeeSalaryOut)
+async def get_employee_salary(
+    employee_id: UUID,
+    as_of: date | None = Query(default=None),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db),
+) -> EmployeeSalaryOut:
+    employee = await _org_employee(db, principal.organization_id, employee_id)
+    if not _can_read_salary(principal, employee.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Salary is visible only to HR or the employee.",
+        )
+    org = await db.get(Organization, principal.organization_id)
+    on_date = as_of or _org_today(org)
+    loaded = await load_computed_salary(db, principal.organization_id, employee.id, on_date)
+    if loaded is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Salary is not configured.")
+    wage_row, computed = loaded
+    return _salary_out(employee.id, org.currency if org is not None else "INR", wage_row.effective_from, computed)
+
+
+@router.patch("/employees/{employee_id}/salary", response_model=EmployeeSalaryOut)
+async def patch_employee_salary(
+    employee_id: UUID,
+    body: EmployeeSalaryPatchRequest,
     principal: CurrentPrincipal = Depends(require_hr),
     db: AsyncSession = Depends(get_db),
-) -> SalaryComponentPatchResponse:
-    period = await _org_period(db, principal.organization_id, body.period_id)
-    try:
-        assert_mutable(PayrollPeriodStatus(period.status))
-    except PayrollError as exc:
-        _raise_payroll(exc, conflict=True)
-    await _org_employee(db, principal.organization_id, body.employee_id)
-    if not body.components:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one salary component is required.")
-
-    for item in body.components:
-        component = await db.scalar(
-            select(SalaryComponent).where(
-                SalaryComponent.organization_id == principal.organization_id,
-                SalaryComponent.code == item.code.strip().upper(),
-                SalaryComponent.active.is_(True),
-            )
+) -> EmployeeSalaryOut:
+    employee = await _org_employee(db, principal.organization_id, employee_id)
+    if body.monthly_wage is None and not body.components:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A monthly wage or at least one salary component is required.",
         )
-        if component is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unknown salary component {item.code}.",
-            )
-        assignment = await db.scalar(
-            select(EmployeeSalaryComponent).where(
-                EmployeeSalaryComponent.employee_id == body.employee_id,
-                EmployeeSalaryComponent.salary_component_id == component.id,
-            )
-        )
-        amount = item.amount.quantize(Decimal("0.01"))
-        if assignment is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"No {component.code} assignment for this employee.",
-            )
-        before = {"code": component.code, "amount": _money(assignment.amount)}
-        assignment.amount = amount
-        db.add(
-            AuditEvent(
-                organization_id=principal.organization_id,
-                actor_user_id=principal.user_id,
-                entity_type="employee_salary_component",
-                entity_id=str(assignment.id),
-                action="payroll.salary.update",
-                before_json=before,
-                after_json={"code": component.code, "amount": _money(amount)},
-            )
-        )
-
-    await db.commit()
-    return SalaryComponentPatchResponse(
-        employee_id=body.employee_id,
-        components=await _salary_components_out(db, principal.organization_id, body.employee_id),
+    org = await db.get(Organization, principal.organization_id)
+    as_of = body.effective_from or _org_today(org)
+    before_loaded = await load_computed_salary(db, principal.organization_id, employee.id, as_of)
+    before = (
+        _salary_audit(before_loaded[1], before_loaded[0].effective_from) if before_loaded is not None else None
     )
-
-
-async def _period_assignments(
-    db: AsyncSession, organization_id: UUID
-) -> dict[UUID, list[tuple[EmployeeSalaryComponent, SalaryComponent]]]:
-    rows = (
-        await db.execute(
-            select(EmployeeSalaryComponent, SalaryComponent, Employee)
-            .join(SalaryComponent, SalaryComponent.id == EmployeeSalaryComponent.salary_component_id)
-            .join(Employee, Employee.id == EmployeeSalaryComponent.employee_id)
-            .where(
-                Employee.organization_id == organization_id,
-                SalaryComponent.organization_id == organization_id,
-                SalaryComponent.active.is_(True),
-            )
-            .order_by(Employee.employee_code, SalaryComponent.code)
+    updates = [
+        SalaryComponentPatch(
+            code=item.code,
+            calculation_type=item.calculation_type,
+            rate=item.rate,
+            amount=item.amount,
         )
-    ).all()
-    grouped: dict[UUID, list[tuple[EmployeeSalaryComponent, SalaryComponent]]] = {}
-    for assignment, component, employee in rows:
-        grouped.setdefault(employee.id, []).append((assignment, component))
-    return grouped
+        for item in (body.components or [])
+    ]
+    try:
+        wage_row, computed = await save_salary_config(
+            db,
+            organization_id=principal.organization_id,
+            employee_id=employee.id,
+            as_of=as_of,
+            monthly_wage=body.monthly_wage,
+            component_updates=updates,
+        )
+    except PayrollError as exc:
+        _raise_payroll(exc)
+    db.add(
+        AuditEvent(
+            organization_id=principal.organization_id,
+            actor_user_id=principal.user_id,
+            entity_type="employee_salary",
+            entity_id=str(employee.id),
+            action="payroll.salary.update",
+            before_json=before,
+            after_json=_salary_audit(computed, wage_row.effective_from),
+        )
+    )
+    await db.commit()
+    return _salary_out(
+        employee.id,
+        org.currency if org is not None else "INR",
+        wage_row.effective_from,
+        computed,
+    )
 
 
 def _period_action_out(period: PayrollPeriod, records: list[PayrollRecordDetailOut]) -> PayrollPeriodActionOut:
@@ -254,27 +317,41 @@ async def finalize_period(
     org = await db.get(Organization, principal.organization_id)
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found.")
-    grouped = await _period_assignments(db, principal.organization_id)
-    snapshots: list[tuple[UUID, Decimal, Decimal, Decimal, list[tuple[SalaryComponent, Decimal]]]] = []
+    try:
+        assert_can_finalize(status=PayrollPeriodStatus(period.status), net=Decimal("0.00"))
+    except PayrollError as exc:
+        _raise_payroll(exc, conflict=True)
+
+    components = {
+        component.code.upper(): component
+        for component in (
+            await db.scalars(
+                select(SalaryComponent).where(SalaryComponent.organization_id == principal.organization_id)
+            )
+        ).all()
+    }
+    snapshots: list[tuple[UUID, ComputedSalary, list[tuple[SalaryComponent | None, Decimal, str, str]]]] = []
     period_net = Decimal("0.00")
-    for employee_id, assignments in grouped.items():
-        items = [(component.kind, assignment.amount) for assignment, component in assignments]
-        gross, deductions, net = totals_from_components(items)
-        try:
-            assert_can_finalize(status=PayrollPeriodStatus(period.status), net=net)
-        except PayrollError as exc:
-            _raise_payroll(exc, conflict=True)
-        period_net += net
-        lines = [
-            (component, signed_line_amount(component.kind, assignment.amount))
-            for assignment, component in assignments
-        ]
-        snapshots.append((employee_id, gross, deductions, net, lines))
-    if not snapshots:
-        try:
-            assert_can_finalize(status=PayrollPeriodStatus(period.status), net=Decimal("0.00"))
-        except PayrollError as exc:
-            _raise_payroll(exc, conflict=True)
+    try:
+        for employee, _wage, computed in await list_org_computed_salaries(
+            db, principal.organization_id, period.ends_on
+        ):
+            assert_can_finalize(status=PayrollPeriodStatus(period.status), net=computed.net_amount)
+            period_net += computed.net_amount
+            lines = []
+            for line in computed.lines:
+                component = components.get(line.code)
+                lines.append(
+                    (
+                        component,
+                        signed_line_amount(line.kind, line.amount),
+                        line.name,
+                        line.kind.value,
+                    )
+                )
+            snapshots.append((employee.id, computed, lines))
+    except PayrollError as exc:
+        _raise_payroll(exc, conflict=str(exc) == "Only a draft payroll period can be finalized.")
 
     existing_ids = list(
         await db.scalars(select(PayrollRecord.id).where(PayrollRecord.payroll_period_id == period.id))
@@ -285,38 +362,43 @@ async def finalize_period(
 
     now = datetime.now(UTC)
     record_outs: list[PayrollRecordDetailOut] = []
-    for employee_id, gross, deductions, net, lines in snapshots:
+    for employee_id, computed, lines in snapshots:
         record = PayrollRecord(
             payroll_period_id=period.id,
             employee_id=employee_id,
-            gross_amount=gross,
-            deduction_amount=deductions,
-            net_amount=net,
+            gross_amount=computed.gross_amount,
+            deduction_amount=computed.deduction_amount,
+            net_amount=computed.net_amount,
             currency=org.currency,
             published_at=None,
         )
         db.add(record)
         await db.flush()
         line_outs: list[PayrollRecordLineOut] = []
-        for component, amount in lines:
+        for component, amount, label, kind in lines:
             db.add(
                 PayrollRecordLine(
                     payroll_record_id=record.id,
-                    salary_component_id=component.id,
-                    label_snapshot=component.name,
+                    salary_component_id=component.id if component is not None else None,
+                    label_snapshot=label,
                     amount=amount,
                 )
             )
             line_outs.append(
-                PayrollRecordLineOut(code=component.code, label=component.name, amount=amount)
+                PayrollRecordLineOut(
+                    code=component.code if component is not None else "",
+                    label=label,
+                    amount=amount,
+                    kind=kind,
+                )
             )
         record_outs.append(
             PayrollRecordDetailOut(
                 id=record.id,
                 employee_id=employee_id,
-                gross_amount=gross,
-                deduction_amount=deductions,
-                net_amount=net,
+                gross_amount=computed.gross_amount,
+                deduction_amount=computed.deduction_amount,
+                net_amount=computed.net_amount,
                 currency=org.currency,
                 published_at=None,
                 lines=line_outs,
@@ -360,12 +442,14 @@ async def _record_details(db: AsyncSession, period_id: UUID) -> list[PayrollReco
         line_outs: list[PayrollRecordLineOut] = []
         for line in lines:
             code = ""
+            kind = None
             if line.salary_component_id is not None:
                 component = await db.get(SalaryComponent, line.salary_component_id)
                 if component is not None:
                     code = component.code
+                    kind = component.kind
             line_outs.append(
-                PayrollRecordLineOut(code=code, label=line.label_snapshot, amount=line.amount)
+                PayrollRecordLineOut(code=code, label=line.label_snapshot, amount=line.amount, kind=kind)
             )
         details.append(
             PayrollRecordDetailOut(

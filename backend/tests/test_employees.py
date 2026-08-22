@@ -401,6 +401,14 @@ async def test_hr_creates_invited_employee_with_oi_code_and_invite(client: Async
     assert signed.status_code == 200
     assert signed.json()["user"]["employee_code"] == body["employee_code"]
 
+    salary = await client.get(
+        f"/api/payroll/employees/{body['employee']['id']}/salary",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+    )
+    assert salary.status_code == 200
+    assert salary.json()["monthly_wage"] == "50000.00"
+    assert salary.json()["net_amount"] == "46800.00"
+
 
 async def test_directory_includes_presence(client: AsyncClient):
     hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")

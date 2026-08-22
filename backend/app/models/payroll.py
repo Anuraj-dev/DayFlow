@@ -20,11 +20,23 @@ class SalaryComponent(UUIDPrimaryKey, TimestampMixin, Base):
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class EmployeeWage(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "employee_wages"
+
+    organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)
+    employee_id: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), nullable=False)
+    monthly_wage: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    effective_to: Mapped[date | None] = mapped_column(Date)
+
+
 class EmployeeSalaryComponent(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "employee_salary_components"
 
     employee_id: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), nullable=False)
     salary_component_id: Mapped[UUID] = mapped_column(ForeignKey("salary_components.id"), nullable=False)
+    calculation_type: Mapped[str] = mapped_column(String(32), nullable=False, default="FIXED")
+    rate: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     effective_from: Mapped[date] = mapped_column(Date, nullable=False)
     effective_to: Mapped[date | None] = mapped_column(Date)

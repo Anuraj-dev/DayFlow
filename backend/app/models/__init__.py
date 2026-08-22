@@ -11,6 +11,7 @@ from app.models.identity import AccountInvite, Organization, OrganizationMembers
 from app.models.leave import LeaveBalance, LeaveRequest, LeaveRequestEvent, LeaveType
 from app.models.payroll import (
     EmployeeSalaryComponent,
+    EmployeeWage,
     PayrollPeriod,
     PayrollRecord,
     PayrollRecordLine,
@@ -26,6 +27,7 @@ __all__ = [
     "Employee",
     "EmployeeDocument",
     "EmployeeSalaryComponent",
+    "EmployeeWage",
     "Holiday",
     "JobAssignment",
     "LeaveBalance",

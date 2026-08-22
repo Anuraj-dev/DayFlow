@@ -1,16 +1,15 @@
 from datetime import UTC, date, datetime
-from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.adapters.salary import assign_default_salary
 from app.core.config import get_settings
 from app.core.security import hash_password
-from app.domain.payroll import ComponentKind, PayrollPeriodStatus
+from app.domain.payroll import PayrollPeriodStatus, signed_line_amount
 from app.domain.roles import EmployeeStatus, Role, UserStatus
 from app.models import (
     Employee,
-    EmployeeSalaryComponent,
     JobAssignment,
     LeaveBalance,
     LeaveType,
@@ -160,50 +159,18 @@ async def seed_if_empty(session: AsyncSession) -> None:
             ]
         )
 
-    basic = SalaryComponent(
+    computed = await assign_default_salary(
+        session,
         organization_id=org.id,
-        name="Basic",
-        code="BASIC",
-        kind=ComponentKind.EARNING.value,
+        employee_id=staff_employee.id,
+        effective_from=date(2025, 3, 3),
     )
-    hra = SalaryComponent(
-        organization_id=org.id,
-        name="House rent allowance",
-        code="HRA",
-        kind=ComponentKind.EARNING.value,
-    )
-    pf = SalaryComponent(
-        organization_id=org.id,
-        name="Provident fund",
-        code="PF",
-        kind=ComponentKind.DEDUCTION.value,
-        taxable=False,
-    )
-    session.add_all([basic, hra, pf])
-    await session.flush()
-
-    session.add_all(
-        [
-            EmployeeSalaryComponent(
-                employee_id=staff_employee.id,
-                salary_component_id=basic.id,
-                amount=Decimal("40000.00"),
-                effective_from=date(2025, 3, 3),
-            ),
-            EmployeeSalaryComponent(
-                employee_id=staff_employee.id,
-                salary_component_id=hra.id,
-                amount=Decimal("16000.00"),
-                effective_from=date(2025, 3, 3),
-            ),
-            EmployeeSalaryComponent(
-                employee_id=staff_employee.id,
-                salary_component_id=pf.id,
-                amount=Decimal("4800.00"),
-                effective_from=date(2025, 3, 3),
-            ),
-        ]
-    )
+    components = {
+        component.code.upper(): component
+        for component in (
+            await session.scalars(select(SalaryComponent).where(SalaryComponent.organization_id == org.id))
+        ).all()
+    }
 
     period = PayrollPeriod(
         organization_id=org.id,
@@ -221,9 +188,9 @@ async def seed_if_empty(session: AsyncSession) -> None:
     record = PayrollRecord(
         payroll_period_id=period.id,
         employee_id=staff_employee.id,
-        gross_amount=Decimal("56000.00"),
-        deduction_amount=Decimal("4800.00"),
-        net_amount=Decimal("51200.00"),
+        gross_amount=computed.gross_amount,
+        deduction_amount=computed.deduction_amount,
+        net_amount=computed.net_amount,
         currency="INR",
         published_at=period.published_at,
     )
@@ -233,22 +200,11 @@ async def seed_if_empty(session: AsyncSession) -> None:
         [
             PayrollRecordLine(
                 payroll_record_id=record.id,
-                salary_component_id=basic.id,
-                label_snapshot="Basic",
-                amount=Decimal("40000.00"),
-            ),
-            PayrollRecordLine(
-                payroll_record_id=record.id,
-                salary_component_id=hra.id,
-                label_snapshot="House rent allowance",
-                amount=Decimal("16000.00"),
-            ),
-            PayrollRecordLine(
-                payroll_record_id=record.id,
-                salary_component_id=pf.id,
-                label_snapshot="Provident fund",
-                amount=Decimal("-4800.00"),
-            ),
+                salary_component_id=components[line.code].id,
+                label_snapshot=line.name,
+                amount=signed_line_amount(line.kind, line.amount),
+            )
+            for line in computed.lines
         ]
     )
     await session.commit()

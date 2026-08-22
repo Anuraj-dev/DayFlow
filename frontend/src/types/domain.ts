@@ -138,6 +138,7 @@ export interface PayrollRecordLine {
   code: string
   label: string
   amount: string
+  kind?: string
 }
 
 export interface PayrollRecord {
@@ -157,13 +158,40 @@ export interface SalaryComponentAmount {
   code: string
   name?: string
   kind?: string
+  calculation_type?: string
+  rate?: string | null
   amount: string
+  editable?: boolean
+}
+
+export interface SalaryLine {
+  code: string
+  name: string
+  kind: string
+  calculation_type: string
+  rate: string | null
+  amount: string
+  editable: boolean
+}
+
+export interface EmployeeSalary {
+  employee_id: string
+  monthly_wage: string
+  currency: string
+  effective_from: string
+  gross_amount: string
+  deduction_amount: string
+  net_amount: string
+  employer_amount: string
+  lines: SalaryLine[]
 }
 
 export interface EmployeeSalaryInputs {
   employee_id: string
   employee_name?: string
-  components: SalaryComponentAmount[]
+  monthly_wage?: string
+  net_amount?: string
+  components: SalaryLine[] | SalaryComponentAmount[]
 }
 
 export interface PayrollException {
@@ -183,5 +211,7 @@ export interface PayrollHome {
 
 export interface SalaryComponentPatchResponse {
   employee_id: string
-  components: SalaryComponentAmount[]
+  monthly_wage?: string
+  components?: SalaryComponentAmount[]
+  lines?: SalaryLine[]
 }

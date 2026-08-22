@@ -5,7 +5,7 @@ import { nextTick } from 'vue'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
 import { useSessionStore } from '@/stores/session'
-import type { EmployeeSummary, Role, SessionUser } from '@/types/domain'
+import type { EmployeeSalary, EmployeeSummary, Role, SessionUser } from '@/types/domain'
 import EmployeeProfileView from '@/views/EmployeeProfileView.vue'
 import EmployeesView from '@/views/EmployeesView.vue'
 
@@ -33,6 +33,85 @@ function sessionUser(role: Role, employeeId = SELF_ID): SessionUser {
     first_name: role === 'HR' ? 'Hari' : 'Rohan',
     last_name: role === 'HR' ? 'Rao' : 'Iyer',
     employee_code: role === 'HR' ? 'HR-001' : 'EMP-014',
+  }
+}
+
+function salaryBreakdown(overrides: Partial<EmployeeSalary> = {}): EmployeeSalary {
+  return {
+    employee_id: SELF_ID,
+    monthly_wage: '50000.00',
+    currency: 'INR',
+    effective_from: '2025-03-03',
+    gross_amount: '50000.00',
+    deduction_amount: '3200.00',
+    net_amount: '46800.00',
+    employer_amount: '3000.00',
+    lines: [
+      {
+        code: 'BASIC',
+        name: 'Basic',
+        kind: 'EARNING',
+        calculation_type: 'PERCENT_OF_WAGE',
+        rate: '50.00',
+        amount: '25000.00',
+        editable: true,
+      },
+      {
+        code: 'HRA',
+        name: 'House rent allowance',
+        kind: 'EARNING',
+        calculation_type: 'PERCENT_OF_BASIC',
+        rate: '50.00',
+        amount: '12500.00',
+        editable: true,
+      },
+      {
+        code: 'STD_ALLOW',
+        name: 'Standard Allowance',
+        kind: 'EARNING',
+        calculation_type: 'FIXED',
+        rate: null,
+        amount: '4167.00',
+        editable: true,
+      },
+      {
+        code: 'FIXED_ALLOW',
+        name: 'Fixed Allowance',
+        kind: 'EARNING',
+        calculation_type: 'REMAINDER',
+        rate: null,
+        amount: '3.00',
+        editable: false,
+      },
+      {
+        code: 'PF',
+        name: 'Employee provident fund',
+        kind: 'DEDUCTION',
+        calculation_type: 'PERCENT_OF_BASIC',
+        rate: '12.00',
+        amount: '3000.00',
+        editable: false,
+      },
+      {
+        code: 'PF_EMPLOYER',
+        name: 'Employer provident fund',
+        kind: 'EMPLOYER',
+        calculation_type: 'PERCENT_OF_BASIC',
+        rate: '12.00',
+        amount: '3000.00',
+        editable: false,
+      },
+      {
+        code: 'PT',
+        name: 'Professional tax',
+        kind: 'DEDUCTION',
+        calculation_type: 'FIXED',
+        rate: null,
+        amount: '200.00',
+        editable: false,
+      },
+    ],
+    ...overrides,
   }
 }
 
@@ -257,12 +336,8 @@ describe('Employee profile form sheet', () => {
   it('loads a view-mode form sheet with Personal, Job, Salary, and Documents tabs', async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input)
-      if (url.includes('/api/payroll')) {
-        return jsonResponse(200, {
-          role: 'EMPLOYEE',
-          periods: [],
-          records: [{ id: 'r1', net_amount: '42000.00', currency: 'INR', published_at: '2026-08-01T00:00:00Z' }],
-        })
+      if (url.includes('/salary')) {
+        return jsonResponse(200, salaryBreakdown())
       }
       expect(url).toContain(`/api/employees/${SELF_ID}`)
       return jsonResponse(200, person())
@@ -285,8 +360,8 @@ describe('Employee profile form sheet', () => {
   it('enters edit mode, flags unsaved changes, and PATCHes permitted personal fields', async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url.includes('/api/payroll')) {
-        return jsonResponse(200, { role: 'EMPLOYEE', periods: [], records: [] })
+      if (url.includes('/salary')) {
+        return jsonResponse(200, salaryBreakdown())
       }
       if (init?.method === 'PATCH') {
         expect(url).toContain(`/api/employees/${SELF_ID}`)
@@ -328,12 +403,12 @@ describe('Employee profile form sheet', () => {
   it('lets HR edit job fields and keeps salary on the Salary tab', async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url.includes('/api/payroll')) {
-        return jsonResponse(200, {
-          role: 'HR',
-          periods: [],
-          records: [{ id: 'r1', employee_id: SELF_ID, net_amount: '42000.00', currency: 'INR', published_at: null }],
-        })
+      if (url.includes('/salary') && init?.method === 'PATCH') {
+        const body = JSON.parse(String(init.body)) as { monthly_wage: string }
+        return jsonResponse(200, salaryBreakdown({ monthly_wage: body.monthly_wage, net_amount: '56200.00' }))
+      }
+      if (url.includes('/salary')) {
+        return jsonResponse(200, salaryBreakdown())
       }
       if (init?.method === 'PATCH') {
         expect(JSON.parse(String(init.body))).toEqual({
@@ -358,14 +433,31 @@ describe('Employee profile form sheet', () => {
 
     await tabTrigger(wrapper, 'Salary').trigger('click')
     await nextTick()
-    expect(wrapper.text()).toMatch(/₹42,000\.00/)
-    expect(wrapper.text()).toMatch(/read-only|Payroll/i)
+    expect((inputByLabel(wrapper, 'Monthly wage').element as HTMLInputElement).value).toBe('50000.00')
+    expect(wrapper.text()).toMatch(/₹25,000\.00/)
+    expect(wrapper.text()).toMatch(/₹46,800\.00/)
+    expect(wrapper.text()).toMatch(/Computed/)
+    expect(inputByLabel(wrapper, 'Monthly wage').attributes('disabled')).toBeUndefined()
+    expect(inputByLabel(wrapper, 'BASIC rate').attributes('disabled')).toBeUndefined()
+    expect(wrapper.text()).toMatch(/Fixed Allowance/)
+    expect(wrapper.findAll('label').some((node) => node.text().includes('FIXED_ALLOW'))).toBe(false)
+    await inputByLabel(wrapper, 'Monthly wage').setValue('60000.00')
+    await namedButton(wrapper, 'Save salary').trigger('click')
+    await flushPromises()
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url) === `/api/payroll/employees/${SELF_ID}/salary` &&
+          (init as RequestInit | undefined)?.method === 'PATCH',
+      ),
+    ).toBe(true)
+    expect(wrapper.text()).toMatch(/Salary saved/)
   })
 
   it('shows a deferred Documents tab with a missing-document status', async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
-      if (String(input).includes('/api/payroll')) {
-        return jsonResponse(200, { role: 'EMPLOYEE', periods: [], records: [] })
+      if (String(input).includes('/salary')) {
+        return jsonResponse(200, salaryBreakdown())
       }
       return jsonResponse(200, person())
     })
@@ -377,5 +469,42 @@ describe('Employee profile form sheet', () => {
     expect(wrapper.text()).toMatch(/not available yet/i)
     expect(wrapper.text()).toMatch(/Missing document/i)
     expect(wrapper.text()).not.toMatch(/upload is ready/i)
+  })
+
+  it('shows a read-only computed salary breakdown for the employee', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/salary')) return jsonResponse(200, salaryBreakdown())
+      return jsonResponse(200, person())
+    })
+
+    const { wrapper } = await mountProfile(`/employees/${SELF_ID}`, 'EMPLOYEE')
+    await tabTrigger(wrapper, 'Salary').trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toMatch(/₹25,000\.00/)
+    expect(wrapper.text()).toMatch(/₹12,500\.00/)
+    expect(wrapper.text()).toMatch(/Employee provident fund/)
+    expect(wrapper.text()).toMatch(/Employer contribution/)
+    expect(inputByLabel(wrapper, 'Monthly wage').attributes('disabled')).toBeDefined()
+    expect(wrapper.findAll('button').some((node) => node.text().includes('Save salary'))).toBe(false)
+  })
+
+  it('hides coworker salary when the salary endpoint returns 403', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/salary')) {
+        return jsonResponse(403, { detail: 'Salary is visible only to HR or the employee.' })
+      }
+      return jsonResponse(200, person({ id: OTHER_ID, first_name: 'Hari', last_name: 'Rao' }))
+    })
+
+    const { wrapper } = await mountProfile(`/employees/${OTHER_ID}`, 'EMPLOYEE', SELF_ID)
+    await tabTrigger(wrapper, 'Salary').trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toMatch(/Salary is hidden/)
+    expect(wrapper.text()).not.toMatch(/₹25,000\.00/)
+    expect(wrapper.text()).not.toMatch(/50000/)
   })
 })

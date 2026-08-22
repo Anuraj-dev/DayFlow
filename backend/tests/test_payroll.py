@@ -13,7 +13,6 @@ from app.models import (
     AttendanceSession,
     AuditEvent,
     Employee,
-    EmployeeSalaryComponent,
     LeaveBalance,
     LeaveRequest,
     LeaveType,
@@ -21,7 +20,6 @@ from app.models import (
     OrganizationMembership,
     PayrollPeriod,
     PayrollRecord,
-    SalaryComponent,
     User,
 )
 
@@ -145,7 +143,7 @@ async def test_employee_get_returns_only_own_published_records(client: AsyncClie
     for row in body["records"]:
         assert row["employee_id"] == employee_id
         assert row["published_at"] is not None
-        assert row["net_amount"] == "51200.00"
+        assert row["net_amount"] == "46800.00"
         assert row["currency"] == "INR"
 
     hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
@@ -189,99 +187,122 @@ async def _draft_period_for_demo() -> str:
         return str(period.id)
 
 
-async def test_hr_patches_salary_components_while_period_is_draft(client: AsyncClient):
-    period_id = await _draft_period_for_demo()
+def _salary_url(employee_id: str) -> str:
+    return f"/api/payroll/employees/{employee_id}/salary"
+
+
+def _line_map(body: dict) -> dict[str, dict]:
+    return {row["code"]: row for row in body["lines"]}
+
+
+async def test_hr_patches_wage_recomputes_derived_lines(client: AsyncClient):
     employee = await _sign_in(client, "employee@dayflow.demo", PASSWORD)
     employee_id = employee["user"]["employee_id"]
     hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
     headers = {"Authorization": f"Bearer {hr['access_token']}"}
 
+    current = await client.get(_salary_url(employee_id), headers=headers, params={"as_of": "2026-08-31"})
+    assert current.status_code == 200
+    assert current.json()["monthly_wage"] == "50000.00"
+    assert _line_map(current.json())["BASIC"]["amount"] == "25000.00"
+
     patched = await client.patch(
-        "/api/payroll/salary-components",
+        _salary_url(employee_id),
         headers=headers,
-        json={
-            "employee_id": employee_id,
-            "period_id": period_id,
-            "components": [{"code": "BASIC", "amount": "42000.00"}],
-        },
+        json={"monthly_wage": "60000.00", "effective_from": "2026-11-01"},
     )
     assert patched.status_code == 200
     body = patched.json()
     assert body["employee_id"] == employee_id
-    basic = next(row for row in body["components"] if row["code"] == "BASIC")
-    assert basic["amount"] == "42000.00"
-    assert basic["kind"] == "EARNING"
+    assert body["monthly_wage"] == "60000.00"
+    lines = _line_map(body)
+    assert lines["BASIC"]["amount"] == "30000.00"
+    assert lines["HRA"]["amount"] == "15000.00"
+    assert lines["STD_ALLOW"]["amount"] == "4167.00"
+    assert lines["PERF_BONUS"]["amount"] == "4998.00"
+    assert lines["LTA"]["amount"] == "4998.00"
+    assert lines["FIXED_ALLOW"]["amount"] == "837.00"
+    assert lines["FIXED_ALLOW"]["editable"] is False
+    assert lines["PF"]["amount"] == "3600.00"
+    assert lines["PF_EMPLOYER"]["amount"] == "3600.00"
+    assert lines["PT"]["amount"] == "200.00"
+    assert body["net_amount"] == "56200.00"
+    assert body["employer_amount"] == "3600.00"
+
+    prior = await client.get(_salary_url(employee_id), headers=headers, params={"as_of": "2026-09-30"})
+    assert prior.status_code == 200
+    assert prior.json()["monthly_wage"] == "50000.00"
+    assert _line_map(prior.json())["BASIC"]["amount"] == "25000.00"
+
+    over = await client.patch(
+        _salary_url(employee_id),
+        headers=headers,
+        json={
+            "effective_from": "2026-11-01",
+            "components": [{"code": "STD_ALLOW", "amount": "20000.00"}],
+        },
+    )
+    assert over.status_code == 400
+    assert "exceed" in over.json()["detail"]
 
     async with SessionLocal() as session:
-        stored = await session.scalar(
-            select(EmployeeSalaryComponent)
-            .join(SalaryComponent, SalaryComponent.id == EmployeeSalaryComponent.salary_component_id)
-            .where(
-                EmployeeSalaryComponent.employee_id == UUID(employee_id),
-                SalaryComponent.code == "BASIC",
-            )
-        )
-        assert stored is not None
-        assert stored.amount == Decimal("42000.00")
         audit = await session.scalar(
             select(AuditEvent)
             .where(
-                AuditEvent.entity_type == "employee_salary_component",
+                AuditEvent.entity_type == "employee_salary",
                 AuditEvent.action == "payroll.salary.update",
-                AuditEvent.entity_id == str(stored.id),
+                AuditEvent.entity_id == employee_id,
             )
             .order_by(AuditEvent.created_at.desc())
         )
         assert audit is not None
+        assert audit.organization_id is not None
         assert audit.after_json is not None
-        assert audit.after_json["amount"] == "42000.00"
-        assert audit.after_json["code"] == "BASIC"
+        assert audit.after_json["monthly_wage"] == "60000.00"
 
 
-async def test_employee_cannot_patch_salary_components(client: AsyncClient):
-    period_id = await _draft_period_for_demo()
+async def test_employee_cannot_patch_salary(client: AsyncClient):
     employee = await _sign_in(client, "employee@dayflow.demo", PASSWORD)
     headers = {"Authorization": f"Bearer {employee['access_token']}"}
     patched = await client.patch(
-        "/api/payroll/salary-components",
+        _salary_url(employee["user"]["employee_id"]),
         headers=headers,
-        json={
-            "employee_id": employee["user"]["employee_id"],
-            "period_id": period_id,
-            "components": [{"code": "BASIC", "amount": "1.00"}],
-        },
+        json={"monthly_wage": "1.00"},
     )
     assert patched.status_code == 403
     assert patched.json()["detail"] == "HR role required."
 
 
-async def test_mutating_finalized_period_returns_409(client: AsyncClient):
-    async with SessionLocal() as session:
-        org = await session.scalar(_select_org())
-        assert org is not None
-        published = await session.scalar(
-            select(PayrollPeriod).where(
-                PayrollPeriod.organization_id == org.id,
-                PayrollPeriod.status == PayrollPeriodStatus.PUBLISHED.value,
-            )
-        )
-        assert published is not None
-        period_id = str(published.id)
-
+async def test_employee_reads_own_salary_not_coworker(client: AsyncClient):
     employee = await _sign_in(client, "employee@dayflow.demo", PASSWORD)
-    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
-    headers = {"Authorization": f"Bearer {hr['access_token']}"}
-    patched = await client.patch(
-        "/api/payroll/salary-components",
+    headers = {"Authorization": f"Bearer {employee['access_token']}"}
+    own = await client.get(
+        _salary_url(employee["user"]["employee_id"]),
         headers=headers,
-        json={
-            "employee_id": employee["user"]["employee_id"],
-            "period_id": period_id,
-            "components": [{"code": "BASIC", "amount": "43000.00"}],
-        },
+        params={"as_of": "2026-08-31"},
     )
-    assert patched.status_code == 409
-    assert patched.json()["detail"] == "Finalized payroll records are immutable."
+    assert own.status_code == 200
+    body = own.json()
+    assert body["monthly_wage"] == "50000.00"
+    assert _line_map(body)["BASIC"]["amount"] == "25000.00"
+    assert body["employee_id"] == employee["user"]["employee_id"]
+
+    async with SessionLocal() as session:
+        hr_employee = await session.scalar(select(Employee).where(Employee.employee_code == "HR-001"))
+        assert hr_employee is not None
+        coworker_id = str(hr_employee.id)
+
+    hidden = await client.get(_salary_url(coworker_id), headers=headers)
+    assert hidden.status_code == 403
+    assert hidden.json()["detail"] == "Salary is visible only to HR or the employee."
+
+    coworker_patch = await client.patch(
+        _salary_url(coworker_id),
+        headers=headers,
+        json={"monthly_wage": "1.00"},
+    )
+    assert coworker_patch.status_code == 403
+    assert coworker_patch.json()["detail"] == "HR role required."
 
 
 async def test_hr_finalize_snapshots_salary_and_locks_period(client: AsyncClient):
@@ -291,20 +312,9 @@ async def test_hr_finalize_snapshots_salary_and_locks_period(client: AsyncClient
     hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
     headers = {"Authorization": f"Bearer {hr['access_token']}"}
 
-    patched = await client.patch(
-        "/api/payroll/salary-components",
-        headers=headers,
-        json={
-            "employee_id": employee_id,
-            "period_id": period_id,
-            "components": [
-                {"code": "BASIC", "amount": "41000.00"},
-                {"code": "HRA", "amount": "16000.00"},
-                {"code": "PF", "amount": "4800.00"},
-            ],
-        },
-    )
-    assert patched.status_code == 200
+    salary = await client.get(_salary_url(employee_id), headers=headers, params={"as_of": "2026-09-30"})
+    assert salary.status_code == 200
+    assert salary.json()["monthly_wage"] == "50000.00"
 
     finalized = await client.post(f"/api/payroll/periods/{period_id}/finalize", headers=headers)
     assert finalized.status_code == 200
@@ -314,26 +324,32 @@ async def test_hr_finalize_snapshots_salary_and_locks_period(client: AsyncClient
     assert body["starts_on"] == "2026-09-01"
     assert body["ends_on"] == "2026-09-30"
     assert body["pay_date"] == "2026-10-05"
-    records = body["records"]
-    assert len(records) == 1
-    assert records[0]["employee_id"] == employee_id
-    assert records[0]["gross_amount"] == "57000.00"
-    assert records[0]["deduction_amount"] == "4800.00"
-    assert records[0]["net_amount"] == "52200.00"
-    assert records[0]["currency"] == "INR"
-    assert records[0]["published_at"] is None
-    codes = {line["code"]: line["amount"] for line in records[0]["lines"]}
-    assert codes["BASIC"] == "41000.00"
-    assert codes["HRA"] == "16000.00"
-    assert codes["PF"] == "-4800.00"
+    record = next(row for row in body["records"] if row["employee_id"] == employee_id)
+    assert record["gross_amount"] == "50000.00"
+    assert record["deduction_amount"] == "3200.00"
+    assert record["net_amount"] == "46800.00"
+    assert record["currency"] == "INR"
+    assert record["published_at"] is None
+    codes = {line["code"]: line["amount"] for line in record["lines"]}
+    assert codes["BASIC"] == "25000.00"
+    assert codes["HRA"] == "12500.00"
+    assert codes["STD_ALLOW"] == "4167.00"
+    assert codes["PERF_BONUS"] == "4165.00"
+    assert codes["LTA"] == "4165.00"
+    assert codes["FIXED_ALLOW"] == "3.00"
+    assert codes["PF"] == "-3000.00"
+    assert codes["PT"] == "-200.00"
+    assert codes["PF_EMPLOYER"] == "3000.00"
 
     listed = await client.get("/api/payroll", headers=headers)
     assert listed.status_code == 200
     period = next(row for row in listed.json()["periods"] if row["id"] == period_id)
     assert period["status"] == "FINALIZED"
-    record = next(row for row in listed.json()["records"] if row["employee_id"] == employee_id and row["id"] == records[0]["id"])
-    assert record["net_amount"] == "52200.00"
-    assert record["published_at"] is None
+    listed_record = next(
+        row for row in listed.json()["records"] if row["employee_id"] == employee_id and row["id"] == record["id"]
+    )
+    assert listed_record["net_amount"] == "46800.00"
+    assert listed_record["published_at"] is None
 
     employee_listed = await client.get(
         "/api/payroll",
@@ -341,25 +357,32 @@ async def test_hr_finalize_snapshots_salary_and_locks_period(client: AsyncClient
     )
     assert employee_listed.status_code == 200
     assert period_id not in {row["id"] for row in employee_listed.json()["periods"]}
-    assert records[0]["id"] not in {row["id"] for row in employee_listed.json()["records"]}
+    assert record["id"] not in {row["id"] for row in employee_listed.json()["records"]}
 
-    locked = await client.patch(
-        "/api/payroll/salary-components",
+    later = await client.patch(
+        _salary_url(employee_id),
         headers=headers,
-        json={
-            "employee_id": employee_id,
-            "period_id": period_id,
-            "components": [{"code": "BASIC", "amount": "1.00"}],
-        },
+        json={"monthly_wage": "70000.00", "effective_from": "2026-12-01"},
     )
-    assert locked.status_code == 409
-    assert locked.json()["detail"] == "Finalized payroll records are immutable."
+    assert later.status_code == 200
+    assert later.json()["monthly_wage"] == "70000.00"
+
+    listed_after = await client.get("/api/payroll", headers=headers)
+    still = next(
+        row
+        for row in listed_after.json()["records"]
+        if row["employee_id"] == employee_id and row["id"] == record["id"]
+    )
+    assert still["net_amount"] == "46800.00"
 
     again = await client.post(f"/api/payroll/periods/{period_id}/finalize", headers=headers)
     assert again.status_code == 409
     assert again.json()["detail"] == "Only a draft payroll period can be finalized."
 
     async with SessionLocal() as session:
+        stored = await session.get(PayrollRecord, UUID(record["id"]))
+        assert stored is not None
+        assert stored.net_amount == Decimal("46800.00")
         audit = await session.scalar(
             select(AuditEvent)
             .where(
@@ -372,7 +395,6 @@ async def test_hr_finalize_snapshots_salary_and_locks_period(client: AsyncClient
         assert audit is not None
         assert audit.after_json is not None
         assert audit.after_json["status"] == "FINALIZED"
-        assert audit.after_json["net_amount"] == "52200.00"
 
 
 async def test_publish_makes_payslips_visible_to_employee(client: AsyncClient):
@@ -381,21 +403,6 @@ async def test_publish_makes_payslips_visible_to_employee(client: AsyncClient):
     employee_id = employee["user"]["employee_id"]
     hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
     headers = {"Authorization": f"Bearer {hr['access_token']}"}
-
-    patched = await client.patch(
-        "/api/payroll/salary-components",
-        headers=headers,
-        json={
-            "employee_id": employee_id,
-            "period_id": period_id,
-            "components": [
-                {"code": "BASIC", "amount": "40000.00"},
-                {"code": "HRA", "amount": "16000.00"},
-                {"code": "PF", "amount": "4800.00"},
-            ],
-        },
-    )
-    assert patched.status_code == 200
 
     employee_forbidden = await client.post(
         f"/api/payroll/periods/{period_id}/publish",
@@ -410,7 +417,8 @@ async def test_publish_makes_payslips_visible_to_employee(client: AsyncClient):
 
     finalized = await client.post(f"/api/payroll/periods/{period_id}/finalize", headers=headers)
     assert finalized.status_code == 200
-    record_id = finalized.json()["records"][0]["id"]
+    staff_record = next(row for row in finalized.json()["records"] if row["employee_id"] == employee_id)
+    record_id = staff_record["id"]
 
     hidden = await client.get(
         "/api/payroll",
@@ -424,10 +432,10 @@ async def test_publish_makes_payslips_visible_to_employee(client: AsyncClient):
     body = published.json()
     assert body["id"] == period_id
     assert body["status"] == "PUBLISHED"
-    assert body["records"][0]["id"] == record_id
-    assert body["records"][0]["employee_id"] == employee_id
-    assert body["records"][0]["net_amount"] == "51200.00"
-    assert body["records"][0]["published_at"] is not None
+    published_record = next(row for row in body["records"] if row["id"] == record_id)
+    assert published_record["employee_id"] == employee_id
+    assert published_record["net_amount"] == "46800.00"
+    assert published_record["published_at"] is not None
 
     visible = await client.get(
         "/api/payroll",
@@ -437,7 +445,7 @@ async def test_publish_makes_payslips_visible_to_employee(client: AsyncClient):
     assert period_id in {row["id"] for row in visible.json()["periods"]}
     seen = next(row for row in visible.json()["records"] if row["id"] == record_id)
     assert seen["employee_id"] == employee_id
-    assert seen["net_amount"] == "51200.00"
+    assert seen["net_amount"] == "46800.00"
     assert seen["published_at"] is not None
 
     again = await client.post(f"/api/payroll/periods/{period_id}/publish", headers=headers)
@@ -677,16 +685,12 @@ async def test_payroll_mutations_are_organization_scoped(client: AsyncClient):
     hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
     headers = {"Authorization": f"Bearer {hr['access_token']}"}
     patched = await client.patch(
-        "/api/payroll/salary-components",
+        _salary_url(foreign_employee_id),
         headers=headers,
-        json={
-            "employee_id": foreign_employee_id,
-            "period_id": foreign_period_id,
-            "components": [{"code": "BASIC", "amount": "1.00"}],
-        },
+        json={"monthly_wage": "1.00"},
     )
     assert patched.status_code == 404
-    assert patched.json()["detail"] == "Payroll period not found."
+    assert patched.json()["detail"] == "Employee not found."
 
     finalize = await client.post(f"/api/payroll/periods/{foreign_period_id}/finalize", headers=headers)
     assert finalize.status_code == 404

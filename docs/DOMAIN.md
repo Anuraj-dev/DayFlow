@@ -76,13 +76,25 @@ Domain model and rules for the hackathon MVP. This is not an API spec or a migra
 
 ## Payroll
 
+Payroll is a monthly wage split. Domain math in `backend/app/domain/payroll.py` turns wage + structure into earning, deduction, and employer lines. Routes load, call that function, persist, and return. They do not re-encode the formula.
+
+`employee_wages`
+
+- `id`, `organization_id`, `employee_id`, `monthly_wage`, `effective_from`, `effective_to`
+- Finalization uses the wage effective on the payroll period end date
+
 `salary_components`
 
-- `id`, `organization_id`, `name`, `code`, `kind` where kind is earning or deduction, `calculation_type`, `taxable`, `active`
+- `id`, `organization_id`, `name`, `code`, `kind` where kind is `EARNING`, `DEDUCTION`, or `EMPLOYER`, `calculation_type`, `taxable`, `active`
+- `calculation_type` is `FIXED`, `PERCENT_OF_WAGE`, `PERCENT_OF_BASIC`, or `REMAINDER`
+- Among earnings, only HRA may be a percentage of Basic. Employee PF may be a percentage of Basic as a deduction. Cycles and negative wage, rates, or amounts are rejected
 
 `employee_salary_components`
 
-- `id`, `employee_id`, `salary_component_id`, `amount`, `effective_from`, `effective_to`
+- `id`, `employee_id`, `salary_component_id`, `calculation_type`, `rate`, `amount`, `effective_from`, `effective_to`
+- `rate` holds a percentage (for example 50.00 is 50%). `amount` is the computed rupee value, or the configured rupee value when type is `FIXED`
+- Remainder (`FIXED_ALLOW`) is computed so Basic + HRA + Standard Allowance + Performance Bonus + LTA + remainder equals monthly wage. It is not editable
+- If configured earnings would exceed monthly wage, the change is rejected
 
 `payroll_periods`
 
@@ -91,10 +103,18 @@ Domain model and rules for the hackathon MVP. This is not an API spec or a migra
 `payroll_records`
 
 - `id`, `payroll_period_id`, `employee_id`, `gross_amount`, `deduction_amount`, `net_amount`, `currency`, `payslip_storage_key`, `published_at`
+- Gross is the sum of earnings, which equals monthly wage when the structure is valid
+- Deduction amount is employee PF + professional tax. Employer PF is informational and does not reduce net pay
+- Finalized records are immutable. A later salary change does not rewrite a snapshot
 
 `payroll_record_lines`
 
 - `id`, `payroll_record_id`, `salary_component_id`, `label_snapshot`, `amount`
+- Finalization snapshots labels and amounts. Deduction amounts are stored signed negative
+
+Seeded structure for the staff employee (and new hires): monthly wage ₹50,000; Basic 50% of wage; HRA 50% of Basic; Standard Allowance ₹4,167 fixed; Performance Bonus 8.33% of wage; LTA 8.33% of wage; Fixed Allowance remainder; employee PF 12% of Basic; employer PF 12% of Basic (employer line); professional tax ₹200.
+
+HR may configure any employee's wage and editable rates or amounts. Employees may read only their own breakdown. Coworker salary stays hidden. Salary changes are org-scoped and write `audit_events`.
 
 ## Audit
 
@@ -114,7 +134,8 @@ Organization
   │            ├── Attendance sessions ── Correction requests
   │            ├── Leave balances ── Leave type
   │            ├── Leave requests ── Leave request events
-  │            └── Salary components
+  │            ├── Salary components
+  │            └── Wages
   ├── Work policies and holidays
   └── Payroll periods ── Payroll records ── Payroll record lines
 ```
@@ -149,7 +170,7 @@ Implement these in `backend/app/domain`. Routes call domain functions; they do n
 | Corrections | Employee requests, HR decides, audit event always recorded |
 | Weekends and holidays | Excluded from leave day count by policy |
 | Leave cancellation | Employee can cancel pending requests; approved leave needs HR reversal |
-| Payroll engine | Fixed monthly components only; no tax engine |
+| Payroll engine | Monthly wage split with PF (12% of Basic) and professional tax ₹200; no broader tax engine |
 | Payslip | Generated only after HR finalizes and publishes a period |
 | Documents | Private storage with HR/self access, size and type limits. Tab may stay deferred |
 | Notifications | In-app activity only; email stays future work except account security |
