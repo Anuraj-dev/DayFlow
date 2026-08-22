@@ -63,6 +63,7 @@ export interface HrDashboard {
   pending_approvals: number
   attendance_exceptions: number
   payroll_period_due: boolean
+  today_coverage?: string
 }
 
 export type DashboardPayload = EmployeeDashboard | HrDashboard
