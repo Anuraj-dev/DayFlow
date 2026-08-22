@@ -157,6 +157,7 @@ describe('HR people directory', () => {
     )
     await flushPromises()
     expect(wrapper.get('table').text()).toMatch(/EMP-020/)
+    expect(namedButton(wrapper, 'New').exists()).toBe(true)
   })
 
   it('shows an empty directory when /api/employees returns no people', async () => {

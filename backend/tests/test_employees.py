@@ -347,3 +347,67 @@ async def test_patch_rejects_null_required_fields(client: AsyncClient):
     )
     assert response.status_code == 400
     assert "cannot be empty" in response.json()["detail"]
+
+
+async def test_employee_cannot_create_hire(client: AsyncClient):
+    employee = await _sign_in(client, "employee@dayflow.demo", "ChangeMe_Emp12!")
+    response = await client.post(
+        "/api/employees",
+        headers={"Authorization": f"Bearer {employee['access_token']}"},
+        json={"first_name": "Jo", "last_name": "Do", "email": "jo.do@dayflow.demo"},
+    )
+    assert response.status_code == 403
+
+
+async def test_hr_creates_invited_employee_with_oi_code_and_invite(client: AsyncClient):
+    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
+    suffix = uuid4().hex[:8]
+    email = f"hire.{suffix}@dayflow.demo"
+    created = await client.post(
+        "/api/employees",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+        json={
+            "first_name": "Jo",
+            "last_name": "Do",
+            "email": email,
+            "title": "Analyst",
+            "department": "Finance",
+            "joined_on": "2026-03-01",
+        },
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["employee_code"].startswith("OIJODO2026")
+    assert body["employee"]["status"] == "INVITED"
+    assert body["employee"]["presence"] == "none"
+    assert body["employee"]["title"] == "Analyst"
+    token = body["invite_token"]
+    assert token
+
+    activated = await client.post(
+        "/api/auth/activate-account",
+        json={
+            "employee_code": body["employee_code"],
+            "email": email,
+            "token": token,
+            "password": "ChangeMe_Emp12!",
+        },
+    )
+    assert activated.status_code == 200
+    signed = await client.post(
+        "/api/auth/sign-in",
+        json={"email": email, "password": "ChangeMe_Emp12!"},
+    )
+    assert signed.status_code == 200
+    assert signed.json()["user"]["employee_code"] == body["employee_code"]
+
+
+async def test_directory_includes_presence(client: AsyncClient):
+    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
+    listed = await client.get(
+        "/api/employees",
+        headers={"Authorization": f"Bearer {hr['access_token']}"},
+    )
+    assert listed.status_code == 200
+    for person in listed.json():
+        assert person["presence"] in {"present", "on_leave", "absent", "none"}

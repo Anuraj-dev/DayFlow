@@ -16,6 +16,23 @@ def normalize_email(value: str) -> str:
     return str(value).strip().casefold()
 
 
+def _name_letters(value: str) -> str:
+    letters = "".join(ch for ch in value.upper() if "A" <= ch <= "Z")
+    padded = letters + "X"
+    return padded[:2]
+
+
+def build_employee_code(
+    *,
+    prefix: str = "OI",
+    first_name: str,
+    last_name: str,
+    year: int,
+    serial: int,
+) -> str:
+    return f"{prefix}{_name_letters(first_name)}{_name_letters(last_name)}{year}{serial:04d}"
+
+
 def public_signup_role() -> None:
     """Public registration never assigns a role. Roles arrive on an invite."""
     return None

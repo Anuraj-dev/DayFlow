@@ -21,6 +21,16 @@ class AttendanceError(ValueError):
     pass
 
 
+def derive_presence(*, invited: bool, on_leave: bool, present_today: bool) -> str:
+    if invited:
+        return "none"
+    if on_leave:
+        return "on_leave"
+    if present_today:
+        return "present"
+    return "absent"
+
+
 def can_check_in(*, open_session_exists: bool, on_leave: bool) -> None:
     if on_leave:
         raise AttendanceError("Employee is on approved leave.")

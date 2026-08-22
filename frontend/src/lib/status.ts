@@ -5,6 +5,22 @@ function normalizeStatus(state: string | null | undefined): string {
     .replace(/[\s-]+/g, '_')
 }
 
+export function presenceLabel(state: string | null | undefined): string {
+  switch (normalizeStatus(state)) {
+    case 'present':
+      return 'Present'
+    case 'on_leave':
+    case 'leave':
+      return 'On leave'
+    case 'absent':
+      return 'Absent'
+    case 'none':
+      return '—'
+    default:
+      return state ? state.replace(/_/g, ' ') : '—'
+  }
+}
+
 export function attendanceStatusLabel(state: string | null | undefined): string {
   switch (normalizeStatus(state)) {
     case 'not_checked_in':

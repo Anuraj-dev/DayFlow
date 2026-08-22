@@ -3,10 +3,11 @@ from decimal import Decimal
 
 import pytest
 
-from app.domain.attendance import AttendanceError, can_check_in, can_check_out, derive_day_status
+from app.domain.attendance import AttendanceError, can_check_in, can_check_out, derive_day_status, derive_presence
 from app.domain.identity import (
     IdentityError,
     assert_employee_patch_allowed,
+    build_employee_code,
     can_edit_employee,
     can_read_employee,
 )
@@ -19,6 +20,17 @@ from app.domain.leave import (
 )
 from app.domain.payroll import PayrollError, PayrollPeriodStatus, assert_mutable, net_amount
 from app.domain.roles import Role
+
+
+def test_build_employee_code_matches_board_format():
+    assert build_employee_code(first_name="Jo", last_name="Do", year=2022, serial=1) == "OIJODO20220001"
+
+
+def test_derive_presence_prefers_leave_then_present():
+    assert derive_presence(invited=True, on_leave=False, present_today=False) == "none"
+    assert derive_presence(invited=False, on_leave=True, present_today=True) == "on_leave"
+    assert derive_presence(invited=False, on_leave=False, present_today=True) == "present"
+    assert derive_presence(invited=False, on_leave=False, present_today=False) == "absent"
 
 
 def test_directory_is_readable_by_employees():

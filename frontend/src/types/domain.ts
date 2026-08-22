@@ -34,6 +34,7 @@ export interface EmployeeSummary {
   employment_type?: string | null
   location?: string | null
   joined_on?: string | null
+  presence?: string | null
 }
 
 export interface ApiError {

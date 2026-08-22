@@ -1,11 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import EmptyState from '@/components/EmptyState.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import {
@@ -17,10 +25,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { api } from '@/api/client'
-import { employeeStatusLabel, statusTone } from '@/lib/status'
+import { api, HttpError } from '@/api/client'
+import { employeeStatusLabel, presenceLabel, statusTone } from '@/lib/status'
+import { useSessionStore } from '@/stores/session'
 import type { EmployeeStatus, EmployeeSummary } from '@/types/domain'
 
+const session = useSessionStore()
 const employees = ref<EmployeeSummary[]>([])
 const loading = ref(true)
 const error = ref('')
@@ -29,6 +39,19 @@ const statusFilter = ref<'all' | EmployeeStatus>('all')
 const sortBy = ref<'name' | 'code' | 'department'>('name')
 const page = ref(1)
 const PAGE_SIZE = 20
+const hireOpen = ref(false)
+const hiring = ref(false)
+const hireError = ref('')
+const inviteToken = ref('')
+const inviteCode = ref('')
+const hire = reactive({
+  first_name: '',
+  last_name: '',
+  email: '',
+  title: '',
+  department: '',
+  joined_on: '',
+})
 
 const visible = computed(() => {
   const term = query.value.trim().toLowerCase()
@@ -63,20 +86,68 @@ watch([query, statusFilter, sortBy], () => {
   page.value = 1
 })
 
+async function loadPeople() {
+  employees.value = await api('/api/employees')
+}
+
 onMounted(async () => {
   try {
-    employees.value = await api('/api/employees')
+    await loadPeople()
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Could not load people.'
   } finally {
     loading.value = false
   }
 })
+
+function openHire() {
+  hireError.value = ''
+  inviteToken.value = ''
+  inviteCode.value = ''
+  hire.first_name = ''
+  hire.last_name = ''
+  hire.email = ''
+  hire.title = ''
+  hire.department = ''
+  hire.joined_on = ''
+  hireOpen.value = true
+}
+
+async function submitHire() {
+  hireError.value = ''
+  hiring.value = true
+  try {
+    const payload = await api<{
+      employee: EmployeeSummary
+      invite_token: string
+      employee_code: string
+    }>('/api/employees', {
+      method: 'POST',
+      body: JSON.stringify({
+        first_name: hire.first_name,
+        last_name: hire.last_name,
+        email: hire.email,
+        title: hire.title || null,
+        department: hire.department || null,
+        joined_on: hire.joined_on || null,
+      }),
+    })
+    inviteToken.value = payload.invite_token
+    inviteCode.value = payload.employee_code
+    await loadPeople()
+  } catch (err) {
+    hireError.value = err instanceof HttpError ? err.detail : 'Could not create this employee.'
+  } finally {
+    hiring.value = false
+  }
+}
 </script>
 
 <template>
   <section class="sheet">
-    <PageHeader title="People" description="Find and open employee records." />
+    <PageHeader title="People" description="Find, activate, and open employee records.">
+      <Button v-if="session.isHr" type="button" @click="openHire">New</Button>
+    </PageHeader>
     <div class="mb-3 flex flex-wrap gap-3">
       <label class="grid max-w-xs min-w-48 flex-1 gap-1 text-sm font-medium">
         Filter people
@@ -132,6 +203,7 @@ onMounted(async () => {
           <TableHead>Department</TableHead>
           <TableHead>Role</TableHead>
           <TableHead>Status</TableHead>
+          <TableHead>Attendance</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -155,9 +227,58 @@ onMounted(async () => {
               :tone="statusTone(employeeStatusLabel(person.status))"
             />
           </TableCell>
+          <TableCell>
+            <StatusBadge
+              :label="presenceLabel(person.presence)"
+              :tone="statusTone(presenceLabel(person.presence))"
+            />
+          </TableCell>
         </TableRow>
       </TableBody>
       </Table>
     </template>
+    <Dialog :open="hireOpen" @update:open="hireOpen = $event">
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>New employee</DialogTitle>
+          <DialogDescription>
+            Creates an invited record and a one-time activate token.
+          </DialogDescription>
+        </DialogHeader>
+        <p v-if="hireError" role="alert">{{ hireError }}</p>
+        <p v-if="inviteToken" role="status">
+          Code {{ inviteCode }}. Invite token: {{ inviteToken }}. Share these so they can activate.
+        </p>
+        <form v-else class="grid gap-3" @submit.prevent="submitHire">
+          <label class="grid gap-1 text-sm font-medium">
+            First name
+            <Input v-model="hire.first_name" required />
+          </label>
+          <label class="grid gap-1 text-sm font-medium">
+            Last name
+            <Input v-model="hire.last_name" required />
+          </label>
+          <label class="grid gap-1 text-sm font-medium">
+            Work email
+            <Input v-model="hire.email" type="email" required />
+          </label>
+          <label class="grid gap-1 text-sm font-medium">
+            Title
+            <Input v-model="hire.title" />
+          </label>
+          <label class="grid gap-1 text-sm font-medium">
+            Department
+            <Input v-model="hire.department" />
+          </label>
+          <label class="grid gap-1 text-sm font-medium">
+            Joined on
+            <Input v-model="hire.joined_on" type="date" />
+          </label>
+          <DialogFooter>
+            <Button type="submit" :disabled="hiring">{{ hiring ? 'Creating…' : 'Create' }}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   </section>
 </template>
