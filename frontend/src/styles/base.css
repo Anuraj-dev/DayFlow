@@ -16,6 +16,7 @@ html,
 body,
 #app {
   min-height: 100%;
+  max-width: 100%;
 }
 
 body {
@@ -23,6 +24,7 @@ body {
   font-family: var(--font);
   color: var(--ink);
   background: var(--canvas);
+  overflow-x: clip;
 }
 
 button,
@@ -36,8 +38,10 @@ button {
   cursor: pointer;
 }
 
-a {
-  color: inherit;
+@layer base {
+  a {
+    color: inherit;
+  }
 }
 
 :focus-visible {
@@ -175,6 +179,12 @@ a {
     font-size: 14px;
   }
 
+  @media (pointer: coarse) {
+    html {
+      font-size: 16px;
+    }
+  }
+
   body {
     @apply bg-background text-foreground font-sans antialiased;
     line-height: 1.5;
@@ -200,10 +210,82 @@ a {
   }
 }
 
-.sheet {
-  background: #FFFFFF;
-  border: 1px solid #DEE2E6;
-  border-radius: 4px;
-  padding: 24px 16px;
-  max-width: 1400px;
+@layer components {
+  .sheet {
+    background: #ffffff;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 24px 16px;
+    width: 100%;
+    min-width: 0;
+    max-width: 1400px;
+    overflow: hidden;
+  }
+
+  .sheet-auth {
+    width: 100%;
+    max-width: 28rem;
+  }
+
+  .feedback-success,
+  .feedback-error {
+    margin: 0 0 1rem;
+    border: 1px solid;
+    border-radius: 4px;
+    padding: 0.65rem 0.75rem;
+  }
+
+  .feedback-success {
+    border-color: #7fbe8f;
+    background: var(--success-bg);
+    color: #146c2e;
+  }
+
+  .feedback-error {
+    border-color: #e3a0a9;
+    background: var(--danger-bg);
+    color: #a61b29;
+  }
+
+  .mobile-record-list {
+    display: grid;
+    gap: 0;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--sheet);
+  }
+
+  .mobile-record {
+    display: grid;
+    gap: 0.65rem;
+    padding: 1rem;
+  }
+
+  .mobile-record + .mobile-record {
+    border-top: 1px solid var(--line);
+  }
+
+  .mobile-record-row {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .mobile-record-label {
+    color: var(--muted-text);
+  }
+
+  .mobile-record-value {
+    min-width: 0;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  @media (min-width: 640px) {
+    .mobile-record-list {
+      display: none;
+    }
+  }
 }

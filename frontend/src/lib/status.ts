@@ -52,6 +52,19 @@ export function exceptionKindLabel(kind: string | null | undefined): string {
   }
 }
 
+export function leaveTypeLabel(type: string | null | undefined): string {
+  switch (normalizeStatus(type)) {
+    case 'paid':
+      return 'Paid'
+    case 'sick':
+      return 'Sick'
+    case 'unpaid':
+      return 'Unpaid'
+    default:
+      return type ? type.replace(/_/g, ' ') : 'Unknown'
+  }
+}
+
 export function leaveStatusLabel(status: string | null | undefined): string {
   switch (normalizeStatus(status)) {
     case 'draft':

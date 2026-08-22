@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { EyeIcon, EyeOffIcon } from '@lucide/vue'
 import { ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
@@ -27,6 +28,7 @@ const email = ref('')
 const token = ref('')
 const password = ref('')
 const submitting = ref(false)
+const passwordVisible = ref(false)
 const state = ref<'form' | 'expired' | 'used' | 'sent' | 'verified'>(
   route.query.verified === '1' ? 'verified' : 'form',
 )
@@ -63,10 +65,10 @@ async function onSubmit() {
 
 <template>
   <main class="flex min-h-screen items-center justify-center bg-[#F8F9FA] p-6">
-    <section class="sheet w-full max-w-md">
+    <section class="sheet sheet-auth">
       <h1 class="mt-0 mb-2">Activate account</h1>
       <p class="mt-0 mb-4 text-[#495057]">
-        Match your invite to employee ID and work email, then set a password.
+        Use the employee ID and invite token from your HR invitation, then set a password.
       </p>
       <Alert v-if="state === 'expired'" variant="destructive" class="mb-3">
         <AlertTitle>Invite expired</AlertTitle>
@@ -87,20 +89,43 @@ async function onSubmit() {
         </Alert>
         <label class="grid gap-1 text-sm font-medium">
           Employee ID
-          <Input v-model="employeeCode" required />
+          <Input v-model="employeeCode" autocomplete="off" required />
         </label>
         <label class="grid gap-1 text-sm font-medium">
           Work email
-          <Input v-model="email" type="email" required />
+          <Input v-model="email" type="email" autocomplete="email" required />
         </label>
         <label class="grid gap-1 text-sm font-medium">
           Invite token
-          <Input v-model="token" required />
+          <Input v-model="token" autocomplete="one-time-code" required />
         </label>
-        <label class="grid gap-1 text-sm font-medium">
-          New password
-          <Input v-model="password" type="password" minlength="12" required />
-        </label>
+        <div class="grid gap-1 text-sm font-medium">
+          <label for="activation-password">New password</label>
+          <span class="flex items-center gap-2">
+            <Input
+              id="activation-password"
+              v-model="password"
+              :type="passwordVisible ? 'text' : 'password'"
+              autocomplete="new-password"
+              minlength="12"
+              aria-describedby="activation-password-help"
+              required
+            />
+            <Button
+              type="button"
+              variant="outline"
+              :aria-label="passwordVisible ? 'Hide password' : 'Show password'"
+              @click="passwordVisible = !passwordVisible"
+            >
+              <EyeOffIcon v-if="passwordVisible" class="size-4" aria-hidden="true" />
+              <EyeIcon v-else class="size-4" aria-hidden="true" />
+              {{ passwordVisible ? 'Hide' : 'Show' }}
+            </Button>
+          </span>
+          <span id="activation-password-help" class="font-normal text-[#495057]">
+            Use at least 12 characters.
+          </span>
+        </div>
         <Button type="submit" :disabled="submitting">{{ submitting ? 'Activating…' : 'Activate' }}</Button>
       </form>
       <RouterLink class="mt-4 inline-block text-[#017E84] underline" to="/sign-in">Sign in</RouterLink>

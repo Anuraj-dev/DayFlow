@@ -202,12 +202,11 @@ describe('Employee payroll', () => {
     const { wrapper } = await mountPayroll('EMPLOYEE')
     expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/payroll')).toBe(true)
     expect(wrapper.text()).toMatch(/Current period/)
-    expect(wrapper.text()).toMatch(/2026-08-01/)
-    expect(wrapper.text()).toMatch(/2026-08-31/)
-    expect(wrapper.text()).toMatch(/2026-09-05/)
+    expect(wrapper.text()).toMatch(/Aug 1, 2026/)
+    expect(wrapper.text()).toMatch(/Aug 31, 2026/)
+    expect(wrapper.text()).toMatch(/Sep 5, 2026/)
     expect(wrapper.text()).toMatch(/Published/)
-    expect(wrapper.text()).toMatch(/INR/)
-    expect(wrapper.text()).toMatch(/51200/)
+    expect(wrapper.text()).toMatch(/₹51,200\.00/)
     expect(wrapper.text()).toMatch(/Basic/)
     expect(namedButton(wrapper, 'Download payslip').exists()).toBe(true)
     expect(wrapper.text()).not.toMatch(/\bFinalize\b/)
@@ -245,8 +244,8 @@ describe('Employee payroll', () => {
     const { wrapper } = await mountPayroll('EMPLOYEE')
     expect(wrapper.text()).toMatch(/Current period/)
     expect(wrapper.text()).toMatch(/Prior period/)
-    expect(wrapper.text()).toMatch(/2026-07-01/)
-    expect(wrapper.text()).toMatch(/49800/)
+    expect(wrapper.text()).toMatch(/Jul 1, 2026/)
+    expect(wrapper.text()).toMatch(/₹49,800\.00/)
   })
 
   it('shows no published payslip when the employee has none', async () => {
@@ -287,9 +286,9 @@ describe('Employee payroll', () => {
 
     const { wrapper } = await mountPayroll('EMPLOYEE')
     expect(wrapper.text()).toMatch(/Published/)
-    expect(wrapper.text()).toMatch(/51200/)
-    expect(wrapper.text()).not.toMatch(/99999/)
-    expect(wrapper.text()).not.toMatch(/2026-09-01/)
+    expect(wrapper.text()).toMatch(/₹51,200\.00/)
+    expect(wrapper.text()).not.toMatch(/₹99,999\.00/)
+    expect(wrapper.text()).not.toMatch(/Sep 1, 2026/)
     expect(wrapper.text()).not.toMatch(/\bDraft\b/)
     expect(wrapper.text()).not.toMatch(/\bFinalize\b/)
   })
@@ -356,7 +355,7 @@ describe('HR payroll control', () => {
     expect(wrapper.text()).toMatch(/Rohan Iyer/)
     expect(inputByLabel(wrapper, 'BASIC').attributes('disabled')).toBeUndefined()
     expect(namedButton(wrapper, 'Finalize').attributes('disabled')).toBeUndefined()
-    expect(namedButton(wrapper, 'Publish').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).not.toMatch(/Publish payslips/)
     expect(namedButton(wrapper, 'Save salary').attributes('disabled')).toBeUndefined()
   })
 
@@ -444,19 +443,17 @@ describe('HR payroll control', () => {
     })
 
     const { wrapper } = await mountPayroll('HR')
-    expect(wrapper.text()).toMatch(/Validation errors/)
+    expect(wrapper.text()).toMatch(/Resolve before finalizing/)
     expect(wrapper.text()).toMatch(/Missing salary data/)
     expect(wrapper.text()).toMatch(/Net pay cannot be negative/)
-    expect(namedButton(wrapper, 'Finalize').attributes('disabled')).toBeUndefined()
-    await namedButton(wrapper, 'Finalize').trigger('click')
-    await flushPromises()
+    expect(namedButton(wrapper, 'Finalize').attributes('disabled')).toBeDefined()
     expect(
       fetchMock.mock.calls.some(
         ([url, init]) =>
           String(url) === `/api/payroll/periods/${DRAFT_PERIOD}/finalize` &&
           (init as RequestInit | undefined)?.method === 'POST',
       ),
-    ).toBe(true)
+    ).toBe(false)
     expect(wrapper.get('[role="alert"]').text()).toMatch(/negative/i)
   })
 
@@ -484,10 +481,10 @@ describe('HR payroll control', () => {
 
     const { wrapper } = await mountPayroll('HR')
     expect(wrapper.text()).toMatch(/Finalized/)
-    expect(wrapper.text()).toMatch(/52200/)
+    expect(wrapper.text()).toMatch(/₹52,200\.00/)
     expect(inputByLabel(wrapper, 'BASIC').attributes('disabled')).toBeDefined()
     expect(namedButton(wrapper, 'Save salary').attributes('disabled')).toBeDefined()
-    expect(namedButton(wrapper, 'Finalize').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).not.toMatch(/Finalize period/)
     expect(namedButton(wrapper, 'Publish').attributes('disabled')).toBeUndefined()
   })
 
@@ -535,6 +532,7 @@ describe('HR payroll control', () => {
 
     const { wrapper } = await mountPayroll('HR')
     await namedButton(wrapper, 'Publish').trigger('click')
+    await namedButton(wrapper, 'Confirm publish').trigger('click')
     await flushPromises()
     expect(
       fetchMock.mock.calls.some(
@@ -544,8 +542,8 @@ describe('HR payroll control', () => {
       ),
     ).toBe(true)
     expect(wrapper.text()).toMatch(/Published/)
-    expect(namedButton(wrapper, 'Publish').attributes('disabled')).toBeDefined()
-    expect(namedButton(wrapper, 'Finalize').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).not.toMatch(/Publish payslips/)
+    expect(wrapper.text()).not.toMatch(/Finalize period/)
   })
 
   it('shows correction needed when a published period requires an adjustment', async () => {
@@ -609,8 +607,8 @@ describe('Settings deferred policy', () => {
   it('shows the HR-only seeded policy deferred state', async () => {
     const { wrapper } = await mountPayroll('HR', '/settings')
     expect(wrapper.text()).toMatch(/Settings/)
-    expect(wrapper.text()).toMatch(/Policies are seeded/)
-    expect(wrapper.text()).toMatch(/deferred/i)
+    expect(wrapper.text()).toMatch(/Attendance source/)
+    expect(wrapper.text()).toMatch(/read-only/i)
     expect(wrapper.get('nav[aria-label="Product areas"]').text()).toMatch(/Settings/)
   })
 
@@ -618,6 +616,6 @@ describe('Settings deferred policy', () => {
     const { wrapper, router } = await mountPayroll('EMPLOYEE', '/settings')
     expect(router.currentRoute.value.name).toBe('dashboard')
     expect(wrapper.get('nav[aria-label="Product areas"]').text()).not.toMatch(/Settings/)
-    expect(wrapper.text()).not.toMatch(/Policies are seeded/)
+    expect(wrapper.text()).not.toMatch(/Attendance source/)
   })
 })

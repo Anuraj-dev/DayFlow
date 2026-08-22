@@ -4,7 +4,7 @@ Odoo 19 **product** UI, not the marketing site. Read this before changing layout
 
 ## Product look
 
-Dense enterprise work views. 14px system UI. Pale canvas, white sheets, 1px borders, almost no shadow. Purple bar. Search, filters, breadcrumbs, and primary actions live in one control panel. List and form are views of the same records. Mobile may substitute a compact list or kanban-like rows for a dense table.
+Dense enterprise work views. 14px system UI. Pale canvas, white sheets, 1px borders, almost no shadow. Purple bar. Search, filters, and primary actions live in one control panel. Do not repeat the current nav item as a title under the bar. List and form are views of the same records. Mobile may substitute a compact list or kanban-like rows for a dense table.
 
 Skip decorative cards. Do not wrap every section in a card. A form is a white sheet. A directory is a table. Use a card only if a kanban column truly needs one (320px, 8px gutters, 3px color marker).
 
@@ -39,7 +39,7 @@ Status always includes text, not color alone.
 ## Shell
 
 - 46px full-width plum bar, white text at 90% opacity, 1px darker bottom border, square entries, 8% black hover.
-- White control panel under the bar: breadcrumbs, search/filter, primary actions. 1px `#DEE2E6` bottom border.
+- White control panel under the bar: search/filter and primary actions only. Hide it when empty. 1px `#DEE2E6` bottom border.
 - Content on `#F8F9FA` with a white sheet. Form sheet max ~1400px.
 
 ## Components

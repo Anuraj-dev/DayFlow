@@ -11,6 +11,7 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { api, HttpError } from '@/api/client'
+import { formatCurrency, formatDate, formatEnumLabel } from '@/lib/format'
 import { employeeStatusLabel, statusTone } from '@/lib/status'
 import { useSessionStore } from '@/stores/session'
 import type { EmployeeStatus, EmployeeSummary, PayrollHome } from '@/types/domain'
@@ -48,6 +49,7 @@ const loading = ref(true)
 const errorTitle = ref('')
 const error = ref('')
 const saveError = ref('')
+const saveStatus = ref('')
 const tab = ref('personal')
 const editing = ref(false)
 const saving = ref(false)
@@ -111,6 +113,7 @@ async function load() {
   error.value = ''
   errorTitle.value = ''
   saveError.value = ''
+  saveStatus.value = ''
   person.value = null
   editing.value = false
   const employeeId = String(route.params.employeeId)
@@ -136,6 +139,7 @@ async function save() {
   if (!person.value || !dirty.value) return
   saving.value = true
   saveError.value = ''
+  saveStatus.value = ''
   const payload: Record<string, string> = {}
   for (const key of dirtyKeys.value) {
     if (allowedFields.value.has(key)) payload[key] = draft[key]
@@ -147,6 +151,7 @@ async function save() {
     })
     applyDraft(person.value)
     editing.value = false
+    saveStatus.value = 'Profile saved.'
   } catch (err) {
     saveError.value = err instanceof HttpError ? err.detail : 'Could not save profile.'
   } finally {
@@ -164,6 +169,7 @@ function cancelEdit() {
   if (person.value) applyDraft(person.value)
   editing.value = false
   saveError.value = ''
+  saveStatus.value = ''
 }
 
 watch(
@@ -187,9 +193,9 @@ watch(
           label="Unsaved changes"
           :tone="statusTone('Unsaved changes')"
         />
-        <Button type="button" variant="outline" :disabled="editing" @click="startEdit">Edit</Button>
+        <Button v-if="!editing" type="button" variant="outline" @click="startEdit">Edit</Button>
         <Button v-if="editing" type="button" variant="secondary" @click="cancelEdit">Discard</Button>
-        <Button type="button" :disabled="!editing || !dirty || saving" @click="save">Save</Button>
+        <Button v-if="editing" type="button" :disabled="!dirty || saving" @click="save">Save</Button>
       </template>
     </PageHeader>
     <p v-if="loading">Loading profile…</p>
@@ -199,14 +205,15 @@ watch(
     </Alert>
     <form v-else-if="person" class="grid gap-4" @submit.prevent="save">
       <p v-if="saveError" role="alert">{{ saveError }}</p>
+      <p v-if="saveStatus" class="feedback-success" role="status">{{ saveStatus }}</p>
       <Tabs v-model="tab">
-        <TabsList>
-          <TabsTrigger value="personal">Personal</TabsTrigger>
-          <TabsTrigger value="job">Job</TabsTrigger>
-          <TabsTrigger value="salary">Salary</TabsTrigger>
-          <TabsTrigger value="documents">Documents</TabsTrigger>
+        <TabsList class="h-auto w-full justify-start overflow-x-auto">
+          <TabsTrigger value="personal" @click="tab = 'personal'">Personal</TabsTrigger>
+          <TabsTrigger value="job" @click="tab = 'job'">Job</TabsTrigger>
+          <TabsTrigger value="salary" @click="tab = 'salary'">Salary</TabsTrigger>
+          <TabsTrigger value="documents" @click="tab = 'documents'">Documents</TabsTrigger>
         </TabsList>
-        <TabsContent value="personal" force-mount class="grid max-w-xl gap-[5px] pt-4">
+        <TabsContent value="personal" class="grid max-w-xl gap-[5px] pt-4">
           <label class="grid gap-1 text-sm font-medium">
             Employee code
             <Input :model-value="person.employee_code" disabled />
@@ -221,7 +228,7 @@ watch(
           </label>
           <label class="grid gap-1 text-sm font-medium">
             Work email
-            <Input :model-value="person.email ?? ''" type="email" disabled />
+            <Input :model-value="person.email ?? 'Not provided'" type="email" disabled />
           </label>
           <label class="grid gap-1 text-sm font-medium">
             Phone
@@ -247,7 +254,7 @@ watch(
             />
           </p>
         </TabsContent>
-        <TabsContent value="job" force-mount class="grid max-w-xl gap-[5px] pt-4">
+        <TabsContent value="job" class="grid max-w-xl gap-[5px] pt-4">
           <label class="grid gap-1 text-sm font-medium">
             Title
             <Input v-model="draft.title" :disabled="!canEdit('title')" />
@@ -258,7 +265,11 @@ watch(
           </label>
           <label class="grid gap-1 text-sm font-medium">
             Employment type
-            <Input v-model="draft.employment_type" :disabled="!canEdit('employment_type')" />
+            <Input
+              v-if="canEdit('employment_type')"
+              v-model="draft.employment_type"
+            />
+            <Input v-else :model-value="formatEnumLabel(draft.employment_type)" disabled />
           </label>
           <label class="grid gap-1 text-sm font-medium">
             Location
@@ -266,12 +277,12 @@ watch(
           </label>
           <label class="grid gap-1 text-sm font-medium">
             Joined on
-            <Input :model-value="person.joined_on ?? ''" disabled />
+            <Input :model-value="formatDate(person.joined_on)" disabled />
           </label>
         </TabsContent>
-        <TabsContent value="salary" force-mount class="grid max-w-xl gap-3 pt-4">
+        <TabsContent value="salary" class="grid max-w-xl gap-3 pt-4">
           <p v-if="salaryRecord">
-            {{ salaryRecord.currency }} {{ salaryRecord.net_amount }}
+            {{ formatCurrency(salaryRecord.currency, salaryRecord.net_amount) }}
             <StatusBadge
               :label="salaryRecord.published_at ? 'Published' : 'Draft'"
               :tone="statusTone(salaryRecord.published_at ? 'Published' : 'Draft')"
@@ -286,10 +297,10 @@ watch(
             }}
           </p>
         </TabsContent>
-        <TabsContent value="documents" force-mount class="grid gap-3 pt-4">
+        <TabsContent value="documents" class="grid gap-3 pt-4">
           <StatusBadge label="Missing document" :tone="statusTone('Missing document')" />
           <p>
-            Document upload is deferred. This tab stays visible so the surface is not silently omitted.
+            Document uploads are not available yet. HR and employees will access private documents here when enabled.
           </p>
         </TabsContent>
       </Tabs>

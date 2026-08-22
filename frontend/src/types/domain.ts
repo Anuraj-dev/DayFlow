@@ -86,6 +86,12 @@ export interface AttendanceException {
   employee_name?: string
   kind: string
   status: string
+  work_date?: string | null
+  current_check_in_at?: string | null
+  current_check_out_at?: string | null
+  proposed_check_in_at?: string | null
+  proposed_check_out_at?: string | null
+  reason?: string | null
 }
 
 export interface AttendanceHome {

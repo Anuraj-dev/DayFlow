@@ -327,7 +327,7 @@ describe('role-aware product views', () => {
     const table = wrapper.get('table')
     expect(table.text()).toMatch(/EMP-1001/)
     expect(table.text()).toMatch(/Ada Ng/)
-    expect(table.text()).toMatch(/\bActive\b/)
+    expect(wrapper.get('[data-tone]').text().trim()).toBe('Active')
   })
 
   it('loads attendance from /api/attendance and keeps check-in wired after a 501', async () => {
@@ -400,16 +400,15 @@ describe('role-aware product views', () => {
           {
             id: 'r1',
             net_amount: '2400.00',
-            currency: 'USD',
+            currency: 'INR',
             published_at: '2026-09-05T00:00:00Z',
           },
         ],
       })
     })
     const wrapper = await mountView(PayrollView, 'EMPLOYEE')
-    expect(wrapper.get('table').text()).toMatch(/2026-08-01/)
+    expect(wrapper.get('table').text()).toMatch(/Aug 1, 2026/)
     expect(wrapper.get('table').text()).toMatch(/Published/)
-    expect(wrapper.text()).toMatch(/USD/)
-    expect(wrapper.text()).toMatch(/2400/)
+    expect(wrapper.text()).toMatch(/₹2,400\.00/)
   })
 })
