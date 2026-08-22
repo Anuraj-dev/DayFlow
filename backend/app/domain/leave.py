@@ -1,6 +1,8 @@
 from datetime import date, timedelta
 from enum import StrEnum
 
+from app.domain.roles import Role
+
 
 class LeaveRequestStatus(StrEnum):
     PENDING = "PENDING"
@@ -11,6 +13,16 @@ class LeaveRequestStatus(StrEnum):
 
 class LeaveError(ValueError):
     pass
+
+
+DEFAULT_LEAVE_GRANTS = {"PAID": 24.0, "SICK": 7.0, "UNPAID": 0.0}
+SICK_LEAVE_CODE = "SICK"
+MAX_CERTIFICATE_BYTES = 5 * 1024 * 1024
+_CERTIFICATE_SNIFF = (
+    (b"%PDF", "application/pdf", ".pdf"),
+    (b"\xff\xd8\xff", "image/jpeg", ".jpg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png", ".png"),
+)
 
 
 def ranges_overlap(a_start: date, a_end: date, b_start: date, b_end: date) -> bool:
@@ -64,6 +76,28 @@ def assert_can_cancel(*, current_status: str, is_owner: bool) -> None:
         raise LeaveError("Employees can cancel only their own pending requests.")
     if current_status != LeaveRequestStatus.PENDING.value:
         raise LeaveError("Only pending leave requests can be cancelled.")
+
+
+def can_download_certificate(*, role, actor_employee_id, request_employee_id) -> bool:
+    if role is Role.HR:
+        return True
+    return actor_employee_id is not None and actor_employee_id == request_employee_id
+
+
+def assert_certificate_allowed(*, leave_type_code: str, has_file: bool) -> None:
+    if has_file and leave_type_code.strip().upper() != SICK_LEAVE_CODE:
+        raise LeaveError("A certificate can only be attached to sick leave.")
+
+
+def sniff_certificate(data: bytes) -> tuple[str, str]:
+    if not data:
+        raise LeaveError("Certificate file is empty.")
+    if len(data) > MAX_CERTIFICATE_BYTES:
+        raise LeaveError("Certificate must be 5 MB or smaller.")
+    for magic, content_type, suffix in _CERTIFICATE_SNIFF:
+        if data.startswith(magic):
+            return content_type, suffix
+    raise LeaveError("Certificate must be a PDF, JPEG, or PNG file.")
 
 
 def assert_can_review(*, current_status: str, decision: str, comment: str | None) -> str:

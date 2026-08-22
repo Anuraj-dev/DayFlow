@@ -635,3 +635,106 @@ async def test_employee_sees_only_own_leave_requests(client: AsyncClient):
     hr_home = await client.get("/api/time-off", headers={"Authorization": f"Bearer {hr['access_token']}"})
     assert hr_home.status_code == 200
     assert request_id in {row["id"] for row in hr_home.json()["pending_queue"]}
+
+
+_PDF = b"%PDF-1.4 sick-certificate\n"
+
+
+async def test_sick_certificate_is_stored_and_not_public(client: AsyncClient):
+    from app.adapters.storage import storage_adapter
+    from app.models import LeaveRequest as LeaveRequestRow
+
+    email, password = await _create_employee_with_balances()
+    other_email, other_password = await _create_employee_with_balances()
+    session = await _sign_in(client, email, password)
+    other = await _sign_in(client, other_email, other_password)
+    hr = await _sign_in(client, "hr@dayflow.demo", "ChangeMe_HR12!")
+    headers = {"Authorization": f"Bearer {session['access_token']}"}
+    other_headers = {"Authorization": f"Bearer {other['access_token']}"}
+    hr_headers = {"Authorization": f"Bearer {hr['access_token']}"}
+
+    paid_with_file = await client.post(
+        "/api/time-off/requests",
+        headers=headers,
+        data={
+            "leave_type": "PAID",
+            "starts_on": "2026-04-06",
+            "ends_on": "2026-04-06",
+            "reason": "Paid leave cannot attach a certificate.",
+        },
+        files={"certificate": ("note.pdf", _PDF, "application/pdf")},
+    )
+    assert paid_with_file.status_code == 400
+    assert "sick" in paid_with_file.json()["detail"].lower()
+
+    created = await client.post(
+        "/api/time-off/requests",
+        headers=headers,
+        data={
+            "leave_type": "SICK",
+            "starts_on": "2026-04-07",
+            "ends_on": "2026-04-07",
+            "reason": "Fever. Certificate attached.",
+        },
+        files={"certificate": ("note.pdf", _PDF, "application/pdf")},
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert body["leave_type"] == "SICK"
+    assert body["has_certificate"] is True
+    assert body["certificate_download_url"] == f"/api/time-off/requests/{body['id']}/certificate"
+    assert body["certificate_expires_at"]
+    request_id = body["id"]
+
+    async with SessionLocal() as db:
+        row = await db.get(LeaveRequestRow, request_id)
+        assert row is not None
+        assert row.certificate_storage_key
+        stored, content_type = storage_adapter.get(row.certificate_storage_key)
+        assert stored == _PDF
+        assert content_type == "application/pdf"
+
+    own = await client.get(body["certificate_download_url"], headers=headers)
+    assert own.status_code == 200
+    assert own.content == _PDF
+    assert "application/pdf" in own.headers.get("content-type", "")
+
+    coworker = await client.get(f"/api/time-off/requests/{request_id}/certificate", headers=other_headers)
+    assert coworker.status_code == 403
+    assert coworker.json()["detail"] == "Not allowed to download this certificate."
+
+    hr_download = await client.get(f"/api/time-off/requests/{request_id}/certificate", headers=hr_headers)
+    assert hr_download.status_code == 200
+    assert hr_download.content == _PDF
+
+    cancelled = await client.post(f"/api/time-off/requests/{request_id}/cancel", headers=headers)
+    assert cancelled.status_code == 200
+
+    suffix = uuid4().hex[:8]
+    async with SessionLocal() as db:
+        other_org = Organization(name=f"Other Co {suffix}", timezone="Asia/Kolkata", currency="INR")
+        db.add(other_org)
+        await db.flush()
+        foreign = User(
+            email=f"hr.other.{suffix}@dayflow.demo",
+            password_hash=hash_password("ChangeMe_Other12!"),
+            status=UserStatus.ACTIVE.value,
+        )
+        db.add(foreign)
+        await db.flush()
+        db.add(
+            OrganizationMembership(
+                organization_id=other_org.id,
+                user_id=foreign.id,
+                role=Role.HR.value,
+            )
+        )
+        await db.commit()
+
+    foreign_session = await _sign_in(client, f"hr.other.{suffix}@dayflow.demo", "ChangeMe_Other12!")
+    leaked = await client.get(
+        f"/api/time-off/requests/{request_id}/certificate",
+        headers={"Authorization": f"Bearer {foreign_session['access_token']}"},
+    )
+    assert leaked.status_code == 404
+    assert leaked.json()["detail"] == "Leave request not found."

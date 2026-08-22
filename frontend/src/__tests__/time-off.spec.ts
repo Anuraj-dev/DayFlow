@@ -48,6 +48,7 @@ function leaveRequest(overrides: Partial<LeaveRequest> = {}): LeaveRequest {
     status: 'PENDING',
     employee_name: 'Rohan Iyer',
     review_comment: null,
+    has_certificate: false,
     ...overrides,
   }
 }
@@ -57,8 +58,8 @@ function home(overrides: Partial<TimeOffHome> = {}): TimeOffHome {
     role: 'EMPLOYEE',
     employee_id: SELF_ID,
     balances: [
-      { leave_type: 'PAID', remaining_days: 18, granted_days: 18, used_days: 0 },
-      { leave_type: 'SICK', remaining_days: 8, granted_days: 8, used_days: 0 },
+      { leave_type: 'PAID', remaining_days: 24, granted_days: 24, used_days: 0 },
+      { leave_type: 'SICK', remaining_days: 7, granted_days: 7, used_days: 0 },
       { leave_type: 'UNPAID', remaining_days: 0, granted_days: 0, used_days: 0 },
     ],
     requests: [],
@@ -156,7 +157,7 @@ describe('Employee time off', () => {
     const wrapper = await mountTimeOff('EMPLOYEE')
     expect(wrapper.text()).toMatch(/Time off/)
     expect(wrapper.text()).toMatch(/PAID|Paid/)
-    expect(wrapper.text()).toMatch(/18/)
+    expect(wrapper.text()).toMatch(/24/)
     expect(wrapper.text()).toMatch(/SICK|Sick/)
     expect(wrapper.text()).toMatch(/UNPAID|Unpaid/)
     expect(inputByLabel(wrapper, 'Leave type').exists()).toBe(true)
@@ -164,8 +165,59 @@ describe('Employee time off', () => {
     expect(inputByLabel(wrapper, 'Ends on').exists()).toBe(true)
     expect(inputByLabel(wrapper, 'Reason').exists()).toBe(true)
     expect(namedButton(wrapper, 'Submit request').exists()).toBe(true)
+    expect(wrapper.find('input[type="file"]').exists()).toBe(false)
     expect(wrapper.text()).not.toMatch(/Pending queue/)
     expect(wrapper.text()).not.toMatch(/\bApprove\b/)
+  })
+
+  it('shows an optional certificate field only for sick leave and submits multipart', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/api/time-off/requests') && init?.method === 'POST') {
+        expect(init.body).toBeInstanceOf(FormData)
+        const form = init.body as FormData
+        expect(form.get('leave_type')).toBe('SICK')
+        expect(form.get('starts_on')).toBe('2026-04-07')
+        expect(form.get('ends_on')).toBe('2026-04-07')
+        expect(form.get('certificate')).toBeInstanceOf(File)
+        return jsonResponse(
+          200,
+          leaveRequest({
+            id: 'req-sick',
+            leave_type: 'SICK',
+            starts_on: '2026-04-07',
+            ends_on: '2026-04-07',
+            has_certificate: true,
+            certificate_download_url: '/api/time-off/requests/req-sick/certificate',
+          }),
+        )
+      }
+      return jsonResponse(200, home())
+    })
+
+    const wrapper = await mountTimeOff('EMPLOYEE')
+    await fillRequest(wrapper, {
+      type: 'SICK',
+      starts: '2026-04-07',
+      ends: '2026-04-07',
+      reason: 'Fever with certificate.',
+    })
+    await nextTick()
+    const fileInput = inputByLabel(wrapper, 'Certificate')
+    expect(fileInput.attributes('type')).toBe('file')
+    const file = new File(['%PDF-1.4'], 'note.pdf', { type: 'application/pdf' })
+    Object.defineProperty(fileInput.element, 'files', { value: [file], configurable: true })
+    await fileInput.trigger('change')
+    await namedButton(wrapper, 'Submit request').trigger('click')
+    await flushPromises()
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url) === '/api/time-off/requests' &&
+          (init as RequestInit | undefined)?.method === 'POST' &&
+          (init as RequestInit).body instanceof FormData,
+      ),
+    ).toBe(true)
   })
 
   it('treats an unsaved range as a draft and shows counted workdays', async () => {
@@ -395,6 +447,39 @@ describe('HR leave approvals', () => {
     expect(namedButton(wrapper, 'Approve').exists()).toBe(true)
     expect(namedButton(wrapper, 'Reject').exists()).toBe(true)
     expect(wrapper.text()).not.toMatch(/Submit request/)
+  })
+
+  it('lets HR open a sick-leave certificate download', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/certificate')) {
+        return Promise.resolve(
+          new Response(new Blob(['%PDF-1.4'], { type: 'application/pdf' }), { status: 200 }),
+        )
+      }
+      return jsonResponse(
+        200,
+        home({
+          role: 'HR',
+          pending_queue: [
+            leaveRequest({
+              id: 'req-sick',
+              employee_name: 'Rohan Iyer',
+              leave_type: 'SICK',
+              has_certificate: true,
+              certificate_download_url: '/api/time-off/requests/req-sick/certificate',
+            }),
+          ],
+        }),
+      )
+    })
+    const wrapper = await mountTimeOff('HR')
+    expect(namedButton(wrapper, 'Download certificate').exists()).toBe(true)
+    await namedButton(wrapper, 'Download certificate').trigger('click')
+    await flushPromises()
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url) === '/api/time-off/requests/req-sick/certificate'),
+    ).toBe(true)
   })
 
   it('approves a pending request through POST /api/time-off/requests/:id/approve', async () => {

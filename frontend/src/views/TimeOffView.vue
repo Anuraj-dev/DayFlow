@@ -17,7 +17,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import { api, HttpError } from '@/api/client'
+import { api, getToken, HttpError } from '@/api/client'
 import { formatDate } from '@/lib/format'
 import { countedWorkdays, isBlockingLeaveStatus, leaveRequiresBalance, rangesOverlap } from '@/lib/leave'
 import { leaveStatusLabel, leaveTypeLabel, statusTone } from '@/lib/status'
@@ -37,6 +37,7 @@ const leaveType = ref<(typeof LEAVE_TYPES)[number]>('PAID')
 const startsOn = ref('')
 const endsOn = ref('')
 const reason = ref('')
+const certificateFile = ref<File | null>(null)
 const submitting = ref(false)
 const reviewComments = reactive<Record<string, string>>({})
 const selectedRequestId = ref('')
@@ -176,18 +177,29 @@ async function submitRequest() {
   }
   submitting.value = true
   try {
-    await api('/api/time-off/requests', {
-      method: 'POST',
-      body: JSON.stringify({
-        leave_type: leaveType.value,
-        starts_on: startsOn.value,
-        ends_on: endsOn.value,
-        reason: reason.value.trim(),
-      }),
-    })
+    if (leaveType.value === 'SICK' && certificateFile.value) {
+      const form = new FormData()
+      form.append('leave_type', leaveType.value)
+      form.append('starts_on', startsOn.value)
+      form.append('ends_on', endsOn.value)
+      form.append('reason', reason.value.trim())
+      form.append('certificate', certificateFile.value)
+      await api('/api/time-off/requests', { method: 'POST', body: form })
+    } else {
+      await api('/api/time-off/requests', {
+        method: 'POST',
+        body: JSON.stringify({
+          leave_type: leaveType.value,
+          starts_on: startsOn.value,
+          ends_on: endsOn.value,
+          reason: reason.value.trim(),
+        }),
+      })
+    }
     startsOn.value = ''
     endsOn.value = ''
     reason.value = ''
+    certificateFile.value = null
     await loadHome()
     actionStatus.value = 'Leave request submitted for HR review.'
   } catch (err) {
@@ -216,6 +228,30 @@ async function decide(id: string, decision: 'approve' | 'reject') {
   } catch (err) {
     actionError.value = err instanceof HttpError ? err.detail : 'Could not update leave.'
   }
+}
+
+async function openCertificate(row: LeaveRequest) {
+  const path = row.certificate_download_url ?? `/api/time-off/requests/${row.id}/certificate`
+  try {
+    const headers = new Headers({ Accept: '*/*' })
+    const token = getToken()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    const response = await fetch(path, { headers })
+    if (!response.ok) {
+      actionError.value = 'Could not download certificate.'
+      return
+    }
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+  } catch {
+    actionError.value = 'Could not download certificate.'
+  }
+}
+
+function onCertificateChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  certificateFile.value = input.files?.[0] ?? null
 }
 
 async function cancelRequest(id: string) {
@@ -375,6 +411,11 @@ async function cancelRequest(id: string) {
             <p v-if="selectedRequest.reason" class="mt-4 mb-0">
               <span class="text-sm font-medium">Reason</span><br />
               {{ selectedRequest.reason }}
+            </p>
+            <p v-if="selectedRequest.has_certificate" class="mt-4 mb-0">
+              <Button type="button" variant="outline" @click="openCertificate(selectedRequest)">
+                Download certificate
+              </Button>
             </p>
 
             <label class="mt-4 grid max-w-xl gap-1 text-sm font-medium">
@@ -537,6 +578,10 @@ async function cancelRequest(id: string) {
           <label class="grid gap-1 text-sm font-medium">
             Reason
             <Textarea v-model="reason" rows="3" maxlength="500" placeholder="Required. Explain the reason for this request." />
+          </label>
+          <label v-if="leaveType === 'SICK'" class="grid gap-1 text-sm font-medium">
+            Certificate
+            <Input type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" @change="onCertificateChange" />
           </label>
           <div v-if="draftKind" class="grid gap-1">
             <StatusBadge :label="draftLabel" :tone="statusTone(draftLabel)" />

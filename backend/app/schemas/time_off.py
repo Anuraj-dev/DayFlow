@@ -25,6 +25,9 @@ class LeaveRequestOut(BaseModel):
     employee_name: str | None = None
     review_comment: str | None = None
     submitted_at: datetime | None = None
+    has_certificate: bool = False
+    certificate_download_url: str | None = None
+    certificate_expires_at: datetime | None = None
 
 
 class TimeOffHome(BaseModel):

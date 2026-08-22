@@ -45,6 +45,8 @@ class LeaveRequest(UUIDPrimaryKey, TimestampMixin, Base):
     reviewed_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     review_comment: Mapped[str | None] = mapped_column(Text)
+    certificate_storage_key: Mapped[str | None] = mapped_column(String(512))
+    certificate_content_type: Mapped[str | None] = mapped_column(String(128))
 
     events: Mapped[list["LeaveRequestEvent"]] = relationship(back_populates="leave_request")
 

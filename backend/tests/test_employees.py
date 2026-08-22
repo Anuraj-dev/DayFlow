@@ -1,12 +1,12 @@
 from datetime import date
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from httpx import AsyncClient
 
 from app.core.db import SessionLocal
 from app.core.security import hash_password
 from app.domain.roles import EmployeeStatus, Role, UserStatus
-from app.models import Employee, JobAssignment, Organization, OrganizationMembership, User
+from app.models import Employee, JobAssignment, LeaveBalance, LeaveType, Organization, OrganizationMembership, User
 
 
 async def _sign_in(client: AsyncClient, email: str, password: str) -> dict:
@@ -408,6 +408,27 @@ async def test_hr_creates_invited_employee_with_oi_code_and_invite(client: Async
     assert salary.status_code == 200
     assert salary.json()["monthly_wage"] == "50000.00"
     assert salary.json()["net_amount"] == "46800.00"
+
+    from sqlalchemy import select
+
+    async with SessionLocal() as db:
+        types = {
+            row.code: row.id
+            for row in (
+                await db.scalars(select(LeaveType).where(LeaveType.organization_id == hr["user"]["organization_id"]))
+            ).all()
+        }
+        balances = {
+            row.leave_type_id: row.granted_days
+            for row in (
+                await db.scalars(
+                    select(LeaveBalance).where(LeaveBalance.employee_id == UUID(body["employee"]["id"]))
+                )
+            ).all()
+        }
+        assert balances[types["PAID"]] == 24
+        assert balances[types["SICK"]] == 7
+        assert balances[types["UNPAID"]] == 0
 
 
 async def test_directory_includes_presence(client: AsyncClient):
