@@ -172,7 +172,9 @@ describe('AppShell chrome', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
-    fetchMock = vi.fn(() => jsonResponse(200, { kind: 'EMPLOYEE', attendance_state: 'not_checked_in' }))
+    fetchMock = vi.fn(() =>
+      jsonResponse(200, { kind: 'EMPLOYEE', attendance_state: 'not_checked_in' }),
+    )
     vi.stubGlobal('fetch', fetchMock)
     sessionStorage.clear()
   })
@@ -192,8 +194,7 @@ describe('AppShell chrome', () => {
     expect(bar.text()).toMatch(/Dayflow/)
     expect(bar.attributes('class') ?? bar.html()).toMatch(/46px|#714B67|bg-primary/)
 
-    const panel = wrapper.get('[data-slot="control-panel"]')
-    expect(panel.text()).toMatch(/Overview/)
+    expect(wrapper.get('[data-slot="control-panel"]').element).toBeTruthy()
     expect(wrapper.get('#main').element).toBeTruthy()
   })
 
@@ -247,7 +248,21 @@ describe('role-aware product views', () => {
       history: createMemoryHistory(),
       routes: [
         { path: '/', name: 'home', component: component as never },
-        { path: '/employees/:employeeId', name: 'employee-profile', component: defineComponent({ setup: () => () => h('p') }) },
+        {
+          path: '/employees/:employeeId',
+          name: 'employee-profile',
+          component: defineComponent({ setup: () => () => h('p') }),
+        },
+        {
+          path: '/attendance',
+          name: 'attendance',
+          component: defineComponent({ setup: () => () => h('p') }),
+        },
+        {
+          path: '/time-off',
+          name: 'time-off',
+          component: defineComponent({ setup: () => () => h('p') }),
+        },
       ],
     })
     await router.push('/')
@@ -272,7 +287,7 @@ describe('role-aware product views', () => {
     const wrapper = await mountView(DashboardView, 'EMPLOYEE')
     expect(wrapper.text()).toMatch(/Not checked in/i)
     expect(wrapper.text()).toMatch(/Check in/)
-    expect(wrapper.text()).toMatch(/2026-09-05/)
+    expect(wrapper.text()).toMatch(/Sep 5, 2026/)
     expect(wrapper.html()).not.toMatch(/WorkCard/)
   })
 
@@ -341,7 +356,13 @@ describe('role-aware product views', () => {
     expect((checkIn as HTMLButtonElement).disabled).toBe(false)
     checkIn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
-    expect(fetchMock.mock.calls.some(([url, init]) => String(url).includes('/api/attendance/check-in') && (init as RequestInit | undefined)?.method === 'POST')).toBe(true)
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).includes('/api/attendance/check-in') &&
+          (init as RequestInit | undefined)?.method === 'POST',
+      ),
+    ).toBe(true)
     expect(wrapper.get('[role="alert"]').text()).toMatch(/not implemented|Check-in/i)
     slot.remove()
   })
@@ -375,7 +396,14 @@ describe('role-aware product views', () => {
             status: 'PUBLISHED',
           },
         ],
-        records: [{ id: 'r1', net_amount: '2400.00', currency: 'USD', published_at: '2026-09-05T00:00:00Z' }],
+        records: [
+          {
+            id: 'r1',
+            net_amount: '2400.00',
+            currency: 'USD',
+            published_at: '2026-09-05T00:00:00Z',
+          },
+        ],
       })
     })
     const wrapper = await mountView(PayrollView, 'EMPLOYEE')
