@@ -83,10 +83,27 @@ function salaryInputs(overrides: Partial<EmployeeSalaryInputs> = {}): EmployeeSa
   return {
     employee_id: SELF_ID,
     employee_name: 'Rohan Iyer',
+    monthly_wage: '50000.00',
+    net_amount: '46800.00',
     components: [
-      { code: 'BASIC', name: 'Basic', kind: 'EARNING', amount: '40000.00' },
-      { code: 'HRA', name: 'House rent allowance', kind: 'EARNING', amount: '16000.00' },
-      { code: 'PF', name: 'Provident fund', kind: 'DEDUCTION', amount: '4800.00' },
+      {
+        code: 'BASIC',
+        name: 'Basic',
+        kind: 'EARNING',
+        calculation_type: 'PERCENT_OF_WAGE',
+        rate: '50.00',
+        amount: '25000.00',
+        editable: true,
+      },
+      {
+        code: 'HRA',
+        name: 'House rent allowance',
+        kind: 'EARNING',
+        calculation_type: 'PERCENT_OF_BASIC',
+        rate: '50.00',
+        amount: '12500.00',
+        editable: true,
+      },
     ],
     ...overrides,
   }
@@ -125,14 +142,6 @@ function namedButton(wrapper: VueWrapper, text: string) {
   const button = wrapper.findAll('button').find((node) => node.text().includes(text))
   expect(button, `missing button "${text}"`).toBeTruthy()
   return button!
-}
-
-function inputByLabel(wrapper: VueWrapper, labelText: string) {
-  const label = wrapper.findAll('label').find((node) => node.text().includes(labelText))
-  expect(label, `missing label "${labelText}"`).toBeTruthy()
-  const control = label!.find('input, textarea, select')
-  expect(control.exists(), `missing field for "${labelText}"`).toBe(true)
-  return control
 }
 
 async function mountPayroll(role: Role, path = '/payroll') {
@@ -348,71 +357,18 @@ describe('HR payroll control', () => {
     document.body.innerHTML = ''
   })
 
-  it('lets HR edit salary only while the period is draft', async () => {
+  it('lets HR finalize a draft period and points salary edits to the employee Salary tab', async () => {
     const { wrapper } = await mountPayroll('HR')
     expect(wrapper.text()).toMatch(/Payroll control/)
     expect(wrapper.text()).toMatch(/Draft/)
     expect(wrapper.text()).toMatch(/Rohan Iyer/)
-    expect(inputByLabel(wrapper, 'BASIC').attributes('disabled')).toBeUndefined()
+    expect(wrapper.text()).toMatch(/Salary tab/)
+    expect(wrapper.text()).not.toMatch(/Save salary/)
     expect(namedButton(wrapper, 'Finalize').attributes('disabled')).toBeUndefined()
     expect(wrapper.text()).not.toMatch(/Publish payslips/)
-    expect(namedButton(wrapper, 'Save salary').attributes('disabled')).toBeUndefined()
-  })
-
-  it('PATCHes /api/payroll/salary-components from the draft salary sheet', async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === '/api/payroll/salary-components' && init?.method === 'PATCH') {
-        const body = JSON.parse(String(init.body)) as {
-          employee_id: string
-          period_id: string
-          components: { code: string; amount: string }[]
-        }
-        expect(body.employee_id).toBe(SELF_ID)
-        expect(body.period_id).toBe(DRAFT_PERIOD)
-        expect(body.components).toEqual(
-          expect.arrayContaining([{ code: 'BASIC', amount: '42000.00' }]),
-        )
-        return jsonResponse(200, {
-          employee_id: SELF_ID,
-          components: [
-            { code: 'BASIC', name: 'Basic', kind: 'EARNING', amount: '42000.00' },
-            { code: 'HRA', name: 'House rent allowance', kind: 'EARNING', amount: '16000.00' },
-            { code: 'PF', name: 'Provident fund', kind: 'DEDUCTION', amount: '4800.00' },
-          ],
-        })
-      }
-      if (url.includes('/api/employees')) return jsonResponse(200, people())
-      return jsonResponse(
-        200,
-        home({
-          role: 'HR',
-          periods: [
-            period({
-              id: DRAFT_PERIOD,
-              starts_on: '2026-09-01',
-              ends_on: '2026-09-30',
-              pay_date: '2026-10-05',
-              status: 'DRAFT',
-            }),
-          ],
-          records: [],
-          salary_inputs: [salaryInputs()],
-        }),
-      )
-    })
-
-    const { wrapper } = await mountPayroll('HR')
-    await inputByLabel(wrapper, 'BASIC').setValue('42000.00')
-    await namedButton(wrapper, 'Save salary').trigger('click')
-    await flushPromises()
     expect(
-      fetchMock.mock.calls.some(
-        ([url, init]) =>
-          String(url) === '/api/payroll/salary-components' &&
-          (init as RequestInit | undefined)?.method === 'PATCH',
-      ),
-    ).toBe(true)
+      fetchMock.mock.calls.some(([url, init]) => String(url) === '/api/payroll/salary-components' && init),
+    ).toBe(false)
   })
 
   it('shows validation errors and keeps finalize wired after a 409', async () => {
@@ -482,8 +438,7 @@ describe('HR payroll control', () => {
     const { wrapper } = await mountPayroll('HR')
     expect(wrapper.text()).toMatch(/Finalized/)
     expect(wrapper.text()).toMatch(/₹52,200\.00/)
-    expect(inputByLabel(wrapper, 'BASIC').attributes('disabled')).toBeDefined()
-    expect(namedButton(wrapper, 'Save salary').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).not.toMatch(/Save salary/)
     expect(wrapper.text()).not.toMatch(/Finalize period/)
     expect(namedButton(wrapper, 'Publish').attributes('disabled')).toBeUndefined()
   })
@@ -575,7 +530,7 @@ describe('HR payroll control', () => {
     const { wrapper } = await mountPayroll('HR')
     expect(wrapper.text()).toMatch(/Correction needed/)
     expect(wrapper.text()).toMatch(/adjustment period/i)
-    expect(inputByLabel(wrapper, 'BASIC').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toMatch(/Salary tab/)
   })
 })
 

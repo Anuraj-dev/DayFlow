@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.adapters.salary import assign_default_salary
 from app.api.deps import CurrentPrincipal, get_current_principal, require_hr
 from app.core.db import get_db
 from app.domain.attendance import derive_presence
@@ -273,6 +274,12 @@ async def create_employee(
             expires_at=datetime.now(UTC) + timedelta(days=7),
             created_by=principal.user_id,
         )
+    )
+    await assign_default_salary(
+        db,
+        organization_id=principal.organization_id,
+        employee_id=employee.id,
+        effective_from=joined_on,
     )
     db.add(
         AuditEvent(

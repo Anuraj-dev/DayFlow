@@ -8,13 +8,22 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { api, HttpError } from '@/api/client'
 import { formatCurrency, formatDate, formatEnumLabel } from '@/lib/format'
 import { employeeStatusLabel, statusTone } from '@/lib/status'
 import { useSessionStore } from '@/stores/session'
-import type { EmployeeStatus, EmployeeSummary, PayrollHome } from '@/types/domain'
+import type { EmployeeSalary, EmployeeStatus, EmployeeSummary, SalaryLine } from '@/types/domain'
 
 type Draft = {
   first_name: string
@@ -44,12 +53,20 @@ const HR_FIELDS = new Set<keyof Draft>([
 const route = useRoute()
 const session = useSessionStore()
 const person = ref<EmployeeSummary | null>(null)
-const payroll = ref<PayrollHome | null>(null)
+const salary = ref<EmployeeSalary | null>(null)
 const loading = ref(true)
 const errorTitle = ref('')
 const error = ref('')
 const saveError = ref('')
 const saveStatus = ref('')
+const salaryError = ref('')
+const salaryStatus = ref('')
+const salaryHidden = ref(false)
+const salaryMissing = ref(false)
+const savingSalary = ref(false)
+const salaryDraftWage = ref('')
+const salaryDraftRates = reactive<Record<string, string>>({})
+const salaryDraftAmounts = reactive<Record<string, string>>({})
 const tab = ref('personal')
 const editing = ref(false)
 const saving = ref(false)
@@ -98,11 +115,29 @@ const displayName = computed(() =>
   person.value ? `${person.value.first_name} ${person.value.last_name}` : 'Profile',
 )
 
-const salaryRecord = computed(() => {
-  const records = payroll.value?.records ?? []
-  if (!person.value) return records[0]
-  return records.find((row) => row.employee_id === person.value?.id) ?? records[0]
-})
+function calculationLabel(type: string): string {
+  if (type === 'PERCENT_OF_WAGE') return '% of wage'
+  if (type === 'PERCENT_OF_BASIC') return '% of Basic'
+  if (type === 'REMAINDER') return 'Remainder'
+  return 'Fixed amount'
+}
+
+function lineStatus(line: SalaryLine): string {
+  if (line.kind === 'EMPLOYER') return 'Employer contribution'
+  if (line.kind === 'DEDUCTION') return 'Deduction'
+  if (!line.editable) return 'Computed'
+  return 'Editable'
+}
+
+function applySalaryDraft(row: EmployeeSalary) {
+  salaryDraftWage.value = row.monthly_wage
+  for (const key of Object.keys(salaryDraftRates)) delete salaryDraftRates[key]
+  for (const key of Object.keys(salaryDraftAmounts)) delete salaryDraftAmounts[key]
+  for (const line of row.lines) {
+    if (line.calculation_type === 'FIXED') salaryDraftAmounts[line.code] = line.amount
+    else if (line.rate != null) salaryDraftRates[line.code] = line.rate
+  }
+}
 
 function canEdit(field: keyof Draft): boolean {
   return editing.value && allowedFields.value.has(field)
@@ -115,13 +150,31 @@ async function load() {
   saveError.value = ''
   saveStatus.value = ''
   person.value = null
+  salary.value = null
+  salaryHidden.value = false
+  salaryMissing.value = false
+  salaryError.value = ''
+  salaryStatus.value = ''
   editing.value = false
   const employeeId = String(route.params.employeeId)
   try {
     const row = await api<EmployeeSummary>(`/api/employees/${employeeId}`)
     person.value = row
     applyDraft(row)
-    payroll.value = await api<PayrollHome>('/api/payroll').catch(() => null)
+    try {
+      const breakdown = await api<EmployeeSalary>(`/api/payroll/employees/${employeeId}/salary`)
+      salary.value = breakdown
+      applySalaryDraft(breakdown)
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 403) {
+        salaryHidden.value = true
+      } else if (err instanceof HttpError && err.status === 404) {
+        salaryMissing.value = true
+        salaryDraftWage.value = '50000.00'
+      } else {
+        salaryError.value = err instanceof HttpError ? err.detail : 'Could not load salary.'
+      }
+    }
   } catch (err) {
     if (err instanceof HttpError && err.status === 403) {
       errorTitle.value = 'Access denied'
@@ -156,6 +209,37 @@ async function save() {
     saveError.value = err instanceof HttpError ? err.detail : 'Could not save profile.'
   } finally {
     saving.value = false
+  }
+}
+
+async function saveSalary() {
+  if (!person.value || !session.isHr) return
+  savingSalary.value = true
+  salaryError.value = ''
+  salaryStatus.value = ''
+  const components = (salary.value?.lines ?? [])
+    .filter((line) => line.editable)
+    .map((line) =>
+      line.calculation_type === 'FIXED'
+        ? { code: line.code, calculation_type: line.calculation_type, amount: salaryDraftAmounts[line.code] ?? line.amount }
+        : { code: line.code, calculation_type: line.calculation_type, rate: salaryDraftRates[line.code] ?? line.rate },
+    )
+  try {
+    const breakdown = await api<EmployeeSalary>(`/api/payroll/employees/${person.value.id}/salary`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        monthly_wage: salaryDraftWage.value,
+        components,
+      }),
+    })
+    salary.value = breakdown
+    salaryMissing.value = false
+    applySalaryDraft(breakdown)
+    salaryStatus.value = 'Salary saved.'
+  } catch (err) {
+    salaryError.value = err instanceof HttpError ? err.detail : 'Could not save salary.'
+  } finally {
+    savingSalary.value = false
   }
 }
 
@@ -280,22 +364,79 @@ watch(
             <Input :model-value="formatDate(person.joined_on)" disabled />
           </label>
         </TabsContent>
-        <TabsContent value="salary" class="grid max-w-xl gap-3 pt-4">
-          <p v-if="salaryRecord">
-            {{ formatCurrency(salaryRecord.currency, salaryRecord.net_amount) }}
-            <StatusBadge
-              :label="salaryRecord.published_at ? 'Published' : 'Draft'"
-              :tone="statusTone(salaryRecord.published_at ? 'Published' : 'Draft')"
-            />
-          </p>
-          <p v-else>No published payslip.</p>
-          <p class="text-[#495057]">
-            {{
-              session.isHr
-                ? 'Salary is read-only here. Edit salary inputs in Payroll before a period is finalized.'
-                : 'Salary is read-only for employees.'
-            }}
-          </p>
+        <TabsContent value="salary" class="grid gap-3 pt-4">
+          <p v-if="salaryError" role="alert">{{ salaryError }}</p>
+          <p v-if="salaryStatus" class="feedback-success" role="status">{{ salaryStatus }}</p>
+          <p v-if="salaryHidden">Salary is hidden.</p>
+          <template v-else-if="salary || (session.isHr && salaryMissing)">
+            <p class="m-0 text-[#495057]">
+              {{
+                session.isHr
+                  ? 'HR sets monthly wage and editable rates. Remainder, PF, and professional tax are computed.'
+                  : 'Computed monthly breakdown. Coworker salary stays hidden.'
+              }}
+            </p>
+            <label class="grid max-w-xs gap-1 text-sm font-medium">
+              Monthly wage
+              <Input
+                v-model="salaryDraftWage"
+                inputmode="decimal"
+                :disabled="!session.isHr"
+              />
+            </label>
+            <p v-if="salary" class="m-0">
+              Net {{ formatCurrency(salary.currency, salary.net_amount) }}
+              <StatusBadge label="Computed" :tone="statusTone('Computed')" />
+            </p>
+            <Table v-if="salary">
+              <TableCaption class="sr-only">Salary structure</TableCaption>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Component</TableHead>
+                  <TableHead>Basis</TableHead>
+                  <TableHead>Input</TableHead>
+                  <TableHead>Amount</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow v-for="line in salary.lines" :key="line.code">
+                  <TableCell>{{ line.name }}</TableCell>
+                  <TableCell>{{ calculationLabel(line.calculation_type) }}</TableCell>
+                  <TableCell>
+                    <label
+                      v-if="session.isHr && line.editable && line.calculation_type === 'FIXED'"
+                      class="grid gap-1 text-sm font-medium"
+                    >
+                      {{ line.code }} amount
+                      <Input v-model="salaryDraftAmounts[line.code]" inputmode="decimal" />
+                    </label>
+                    <label
+                      v-else-if="session.isHr && line.editable"
+                      class="grid gap-1 text-sm font-medium"
+                    >
+                      {{ line.code }} rate
+                      <Input v-model="salaryDraftRates[line.code]" inputmode="decimal" />
+                    </label>
+                    <span v-else>{{ line.rate ?? '—' }}</span>
+                  </TableCell>
+                  <TableCell>{{ formatCurrency(salary.currency, line.amount) }}</TableCell>
+                  <TableCell>
+                    <StatusBadge :label="lineStatus(line)" :tone="statusTone(lineStatus(line))" />
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+            <Button
+              v-if="session.isHr"
+              type="button"
+              :disabled="savingSalary"
+              @click="saveSalary"
+            >
+              Save salary
+            </Button>
+          </template>
+          <p v-else>No salary configured.</p>
         </TabsContent>
         <TabsContent value="documents" class="grid gap-3 pt-4">
           <StatusBadge label="Missing document" :tone="statusTone('Missing document')" />

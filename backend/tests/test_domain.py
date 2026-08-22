@@ -18,7 +18,17 @@ from app.domain.leave import (
     counted_days,
     ranges_overlap,
 )
-from app.domain.payroll import PayrollError, PayrollPeriodStatus, assert_mutable, net_amount
+from app.domain.payroll import (
+    CalculationType,
+    ComponentKind,
+    PayrollError,
+    PayrollPeriodStatus,
+    SalaryStructureLine,
+    assert_mutable,
+    compute_salary,
+    default_salary_structure,
+    net_amount,
+)
 from app.domain.roles import Role
 
 
@@ -92,3 +102,117 @@ def test_finalized_payroll_is_immutable():
         half_day_minutes=240,
         late=False,
     )
+
+
+def _line_amount(result, code: str) -> Decimal:
+    return next(line.amount for line in result.lines if line.code == code)
+
+
+def test_default_wage_split_uses_board_literals():
+    result = compute_salary(Decimal("50000.00"), default_salary_structure())
+    assert result.monthly_wage == Decimal("50000.00")
+    assert _line_amount(result, "BASIC") == Decimal("25000.00")
+    assert _line_amount(result, "HRA") == Decimal("12500.00")
+    assert _line_amount(result, "STD_ALLOW") == Decimal("4167.00")
+    assert _line_amount(result, "PERF_BONUS") == Decimal("4165.00")
+    assert _line_amount(result, "LTA") == Decimal("4165.00")
+    assert _line_amount(result, "FIXED_ALLOW") == Decimal("3.00")
+    assert _line_amount(result, "PF") == Decimal("3000.00")
+    assert _line_amount(result, "PF_EMPLOYER") == Decimal("3000.00")
+    assert _line_amount(result, "PT") == Decimal("200.00")
+    earning_total = sum(
+        (line.amount for line in result.lines if line.kind is ComponentKind.EARNING),
+        Decimal("0.00"),
+    )
+    assert earning_total == Decimal("50000.00")
+    remainder = next(line for line in result.lines if line.code == "FIXED_ALLOW")
+    assert remainder.editable is False
+    assert remainder.calculation_type is CalculationType.REMAINDER
+
+
+def test_employee_pf_and_pt_reduce_net_employer_pf_does_not():
+    result = compute_salary(Decimal("50000.00"), default_salary_structure())
+    assert result.gross_amount == Decimal("50000.00")
+    assert result.deduction_amount == Decimal("3200.00")
+    assert result.net_amount == Decimal("46800.00")
+    assert result.employer_amount == Decimal("3000.00")
+    employer = next(line for line in result.lines if line.code == "PF_EMPLOYER")
+    assert employer.kind is ComponentKind.EMPLOYER
+    assert employer.editable is False
+
+
+def test_wage_change_recomputes_derived_amounts():
+    result = compute_salary(Decimal("60000.00"), default_salary_structure())
+    assert _line_amount(result, "BASIC") == Decimal("30000.00")
+    assert _line_amount(result, "HRA") == Decimal("15000.00")
+    assert _line_amount(result, "STD_ALLOW") == Decimal("4167.00")
+    assert _line_amount(result, "PERF_BONUS") == Decimal("4998.00")
+    assert _line_amount(result, "LTA") == Decimal("4998.00")
+    assert _line_amount(result, "FIXED_ALLOW") == Decimal("837.00")
+    assert _line_amount(result, "PF") == Decimal("3600.00")
+    assert result.net_amount == Decimal("56200.00")
+
+
+def test_components_exceeding_wage_are_rejected():
+    structure = [
+        line
+        if line.code != "STD_ALLOW"
+        else SalaryStructureLine(
+            code=line.code,
+            name=line.name,
+            kind=line.kind,
+            calculation_type=line.calculation_type,
+            rate=line.rate,
+            amount=Decimal("20000.00"),
+        )
+        for line in default_salary_structure()
+    ]
+    with pytest.raises(PayrollError, match="exceed"):
+        compute_salary(Decimal("50000.00"), structure)
+
+
+def test_negative_values_and_cycles_are_rejected():
+    with pytest.raises(PayrollError, match="negative"):
+        compute_salary(Decimal("-1.00"), default_salary_structure())
+    with pytest.raises(PayrollError, match="negative"):
+        compute_salary(
+            Decimal("50000.00"),
+            [
+                SalaryStructureLine(
+                    code="BASIC",
+                    name="Basic",
+                    kind=ComponentKind.EARNING,
+                    calculation_type=CalculationType.PERCENT_OF_WAGE,
+                    rate=Decimal("-50.00"),
+                )
+            ],
+        )
+    cyclic = [
+        SalaryStructureLine(
+            code="BASIC",
+            name="Basic",
+            kind=ComponentKind.EARNING,
+            calculation_type=CalculationType.PERCENT_OF_BASIC,
+            rate=Decimal("50.00"),
+        )
+    ]
+    with pytest.raises(PayrollError, match="cycle"):
+        compute_salary(Decimal("50000.00"), cyclic)
+    bonus_of_basic = [
+        SalaryStructureLine(
+            code="BASIC",
+            name="Basic",
+            kind=ComponentKind.EARNING,
+            calculation_type=CalculationType.PERCENT_OF_WAGE,
+            rate=Decimal("50.00"),
+        ),
+        SalaryStructureLine(
+            code="PERF_BONUS",
+            name="Performance Bonus",
+            kind=ComponentKind.EARNING,
+            calculation_type=CalculationType.PERCENT_OF_BASIC,
+            rate=Decimal("10.00"),
+        ),
+    ]
+    with pytest.raises(PayrollError, match="HRA"):
+        compute_salary(Decimal("50000.00"), bonus_of_basic)

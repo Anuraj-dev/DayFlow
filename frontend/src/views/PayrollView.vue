@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import EmptyState from '@/components/EmptyState.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import {
   Table,
   TableBody,
@@ -16,16 +15,10 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { api, HttpError } from '@/api/client'
-import { formatCurrency, formatDate, formatEnumLabel } from '@/lib/format'
+import { formatCurrency, formatDate } from '@/lib/format'
 import { payrollStatusLabel, statusTone } from '@/lib/status'
 import { useSessionStore } from '@/stores/session'
-import type {
-  EmployeeSalaryInputs,
-  EmployeeSummary,
-  PayrollHome,
-  PayrollPeriod,
-  PayrollRecord,
-} from '@/types/domain'
+import type { EmployeeSummary, PayrollHome, PayrollPeriod, PayrollRecord } from '@/types/domain'
 
 const session = useSessionStore()
 const data = ref<PayrollHome | null>(null)
@@ -34,12 +27,10 @@ const error = ref('')
 const actionError = ref('')
 const actionStatus = ref('')
 const loading = ref(true)
-const savingSalary = ref(false)
 const selectedPeriodId = ref('')
 const pendingAction = ref<'finalize' | 'publish' | ''>('')
 const periodPage = ref(1)
 const PERIOD_PAGE_SIZE = 10
-const salaryDrafts = reactive<Record<string, Record<string, string>>>({})
 
 function isPublished(status: string | null | undefined): boolean {
   return (status ?? '').toUpperCase() === 'PUBLISHED'
@@ -94,8 +85,6 @@ const selectedRecords = computed(() => {
   return recordsForPeriod(selectedPeriod.value, visibleRecords.value)
 })
 
-const salaryEditable = computed(() => selectedPeriod.value?.status.toUpperCase() === 'DRAFT')
-
 const salaryRows = computed(() => data.value?.salary_inputs ?? [])
 
 function periodBadge(period: PayrollPeriod): string {
@@ -108,25 +97,9 @@ function recordFor(period: PayrollPeriod): PayrollRecord | undefined {
   return recordsForPeriod(period, visibleRecords.value)[0]
 }
 
-function initSalaryDrafts(inputs: EmployeeSalaryInputs[]) {
-  for (const key of Object.keys(salaryDrafts)) delete salaryDrafts[key]
-  for (const row of inputs) {
-    salaryDrafts[row.employee_id] = Object.fromEntries(row.components.map((item) => [item.code, item.amount]))
-  }
-}
-
 function choosePeriod(home: PayrollHome) {
   const draft = home.periods.find((row) => row.status.toUpperCase() === 'DRAFT')
   selectedPeriodId.value = draft?.id ?? home.periods[0]?.id ?? ''
-}
-
-function salaryAmount(employeeId: string, code: string): string {
-  return salaryDrafts[employeeId]?.[code] ?? ''
-}
-
-function setSalaryAmount(employeeId: string, code: string, value: string | number) {
-  const row = salaryDrafts[employeeId] ?? (salaryDrafts[employeeId] = {})
-  row[code] = String(value)
 }
 
 async function loadHome() {
@@ -135,7 +108,6 @@ async function loadHome() {
   if (session.isHr) {
     people.value = await api<EmployeeSummary[]>('/api/employees').catch(() => [])
   }
-  initSalaryDrafts(home.salary_inputs ?? [])
   if (!selectedPeriodId.value || !home.periods.some((row) => row.id === selectedPeriodId.value)) {
     choosePeriod(home)
   }
@@ -171,35 +143,6 @@ function requestPeriodAction(action: 'finalize' | 'publish') {
     return
   }
   pendingAction.value = action
-}
-
-async function saveSalary() {
-  if (!selectedPeriod.value || !salaryEditable.value) return
-  actionError.value = ''
-  actionStatus.value = ''
-  savingSalary.value = true
-  try {
-    for (const row of salaryRows.value) {
-      const amounts = salaryDrafts[row.employee_id] ?? {}
-      await api('/api/payroll/salary-components', {
-        method: 'PATCH',
-        body: JSON.stringify({
-          employee_id: row.employee_id,
-          period_id: selectedPeriod.value.id,
-          components: row.components.map((item) => ({
-            code: item.code,
-            amount: amounts[item.code] ?? item.amount,
-          })),
-        }),
-      })
-    }
-    await loadHome()
-    actionStatus.value = 'Salary inputs saved.'
-  } catch (err) {
-    actionError.value = err instanceof HttpError ? err.detail : 'Could not save salary.'
-  } finally {
-    savingSalary.value = false
-  }
 }
 
 async function downloadPayslip(recordId: string) {
@@ -366,36 +309,30 @@ watch(selectedPeriodId, () => {
           </Table>
         </div>
 
-        <form class="mt-6 grid max-w-lg gap-3" @submit.prevent="saveSalary">
-          <h2 class="m-0 text-[21px] font-bold">Salary inputs</h2>
+        <div class="mt-6">
+          <h2 class="mb-2 text-[21px] font-bold">Salary structure</h2>
           <p class="m-0 text-[#495057]">
-            {{
-              salaryEditable
-                ? 'Edit salary components before the period is finalized.'
-                : 'Salary is locked after finalization. A correction needs a new adjustment period.'
-            }}
+            Configure monthly wage and rates on the employee Salary tab. Finalization snapshots the
+            structure effective on the period end date.
           </p>
-          <div v-for="row in salaryRows" :key="row.employee_id" class="grid gap-3">
-            <h3 class="m-0 text-[18px] font-medium">{{ personName(row.employee_id, row.employee_name) }}</h3>
-            <label
-              v-for="component in row.components"
-              :key="`${row.employee_id}-${component.code}`"
-              class="grid gap-1 text-sm font-medium"
-            >
-              {{ component.name || formatEnumLabel(component.code) }}
-              <span class="font-normal text-[#495057]">{{ component.code }}</span>
-              <Input
-                :model-value="salaryAmount(row.employee_id, component.code)"
-                inputmode="decimal"
-                :disabled="!salaryEditable"
-                @update:model-value="setSalaryAmount(row.employee_id, component.code, $event)"
-              />
-            </label>
-          </div>
-          <Button type="submit" :disabled="!salaryEditable || savingSalary || !salaryRows.length">
-            Save salary
-          </Button>
-        </form>
+          <Table v-if="salaryRows.length" class="mt-3">
+            <TableCaption class="sr-only">Current salary structures</TableCaption>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Employee</TableHead>
+                <TableHead>Monthly wage</TableHead>
+                <TableHead>Net</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow v-for="row in salaryRows" :key="row.employee_id">
+                <TableCell>{{ personName(row.employee_id, row.employee_name) }}</TableCell>
+                <TableCell>{{ formatCurrency('INR', row.monthly_wage) }}</TableCell>
+                <TableCell>{{ formatCurrency('INR', row.net_amount) }}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
       </template>
 
       <template v-else>
