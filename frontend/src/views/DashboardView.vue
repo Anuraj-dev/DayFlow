@@ -24,7 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { api, HttpError } from '@/api/client'
+import { api } from '@/api/client'
 import { attendanceStatusLabel, statusTone } from '@/lib/status'
 import { useAttendanceStore } from '@/stores/attendance'
 import { useSessionStore } from '@/stores/session'
@@ -36,8 +36,6 @@ const router = useRouter()
 const loading = ref(true)
 const error = ref('')
 const payload = ref<DashboardPayload | null>(null)
-const actionError = ref('')
-const actionStatus = ref('')
 const controlActionsReady = ref(false)
 
 const employee = computed(() => (payload.value?.kind === 'EMPLOYEE' ? payload.value : null))
@@ -45,13 +43,6 @@ const hr = computed(() => (payload.value?.kind === 'HR' ? payload.value : null))
 const balances = computed<LeaveBalance[]>(() => employee.value?.leave_balances ?? [])
 const attendanceLabel = computed(() => attendanceStatusLabel(employee.value?.attendance_state))
 const attendanceTone = computed(() => statusTone(attendanceLabel.value))
-const canCheckIn = computed(
-  () =>
-    attendance.canCheckIn &&
-    employee.value?.attendance_state !== 'on_leave' &&
-    employee.value?.attendance_state !== 'checked_out',
-)
-const canCheckOut = computed(() => attendance.canCheckOut)
 const coverageLabel = computed(
   () => hr.value?.today_coverage || hr.value?.headline || 'Not reported',
 )
@@ -74,20 +65,6 @@ onMounted(async () => {
     loading.value = false
   }
 })
-
-async function punch(path: '/api/attendance/check-in' | '/api/attendance/check-out') {
-  actionError.value = ''
-  actionStatus.value = ''
-  try {
-    await attendance.punch(path)
-    payload.value = await api('/api/dashboard')
-    actionStatus.value = path.endsWith('check-in')
-      ? 'Checked in successfully.'
-      : 'Checked out successfully.'
-  } catch (err) {
-    actionError.value = err instanceof HttpError ? err.detail : 'Attendance action failed.'
-  }
-}
 
 watch(
   () => attendance.revision,
@@ -138,25 +115,8 @@ function dashboardLeaveLabel(leaveType: string) {
 
 <template>
   <section class="sheet dashboard-sheet">
-    <Teleport v-if="controlActionsReady" defer to="#control-actions">
-      <div class="flex items-center gap-2">
-        <template v-if="employee">
-          <Button type="button" :disabled="!canCheckIn" @click="punch('/api/attendance/check-in')">
-            Check in
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            :disabled="!canCheckOut"
-            @click="punch('/api/attendance/check-out')"
-          >
-            Check out
-          </Button>
-        </template>
-        <Button v-else-if="hr?.payroll_period_due" type="button" @click="openPayroll"
-          >Open payroll</Button
-        >
-      </div>
+    <Teleport v-if="controlActionsReady && hr?.payroll_period_due" defer to="#control-actions">
+      <Button type="button" @click="openPayroll">Open payroll</Button>
     </Teleport>
 
     <PageHeader
@@ -216,23 +176,6 @@ function dashboardLeaveLabel(leaveType: string) {
 
           <RouterLink class="dashboard-link" to="/attendance">View attendance</RouterLink>
 
-          <div v-if="!controlActionsReady" class="mt-4 flex gap-2">
-            <Button
-              type="button"
-              :disabled="!canCheckIn"
-              @click="punch('/api/attendance/check-in')"
-            >
-              Check in
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              :disabled="!canCheckOut"
-              @click="punch('/api/attendance/check-out')"
-            >
-              Check out
-            </Button>
-          </div>
         </section>
 
         <section class="leave-summary" aria-labelledby="leave-heading">
@@ -318,10 +261,6 @@ function dashboardLeaveLabel(leaveType: string) {
         >
       </div>
 
-      <div class="dashboard-feedback" aria-live="polite">
-        <p v-if="actionError" class="feedback-error" role="alert">{{ actionError }}</p>
-        <p v-if="actionStatus" class="feedback-success" role="status">{{ actionStatus }}</p>
-      </div>
     </div>
 
     <div v-else-if="hr" class="grid gap-4">
