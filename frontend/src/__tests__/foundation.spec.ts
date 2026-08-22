@@ -312,7 +312,7 @@ describe('role-aware product views', () => {
     const table = wrapper.get('table')
     expect(table.text()).toMatch(/EMP-1001/)
     expect(table.text()).toMatch(/Ada Ng/)
-    expect(table.text()).toMatch(/ACTIVE/)
+    expect(table.text()).toMatch(/\bActive\b/)
   })
 
   it('loads attendance from /api/attendance and keeps check-in wired after a 501', async () => {

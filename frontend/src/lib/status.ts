@@ -21,15 +21,28 @@ export function attendanceStatusLabel(state: string | null | undefined): string 
   }
 }
 
+export function employeeStatusLabel(status: string | null | undefined): string {
+  switch (status) {
+    case 'ACTIVE':
+      return 'Active'
+    case 'INACTIVE':
+      return 'Inactive'
+    case 'INVITED':
+      return 'Invited'
+    default:
+      return status ? status.replace(/_/g, ' ') : 'Unknown'
+  }
+}
+
 export function statusTone(label: string): 'neutral' | 'confirmed' | 'review' | 'danger' {
   const value = label.toLowerCase()
-  if (['active', 'approved', 'published', 'present', 'checked in', 'checked out', 'staffed', 'on track', 'clear', 'queue empty'].includes(value)) {
+  if (['active', 'approved', 'published', 'present', 'checked in', 'checked out'].includes(value)) {
     return 'confirmed'
   }
-  if (['rejected', 'locked', 'danger', 'missing check-out'].includes(value)) {
+  if (['rejected', 'locked', 'danger', 'missing check-out', 'inactive', 'missing document'].includes(value)) {
     return 'danger'
   }
-  if (['pending', 'draft', 'invited', 'not checked in', 'on leave', 'review', 'due', 'needs review'].includes(value)) {
+  if (['pending', 'draft', 'invited', 'not checked in', 'review', 'unsaved changes'].includes(value)) {
     return 'review'
   }
   return 'neutral'
