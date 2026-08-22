@@ -5,8 +5,9 @@ import { defineComponent, h } from 'vue'
 import { RouterView, createMemoryHistory, createRouter, type Router } from 'vue-router'
 
 import AppShell from '@/layouts/AppShell.vue'
+import { formatClock, formatLocalIsoDate } from '@/lib/format'
 import { useSessionStore } from '@/stores/session'
-import type { DashboardPayload, Role, SessionUser } from '@/types/domain'
+import type { AttendanceHome, DashboardPayload, Role, SessionUser } from '@/types/domain'
 import DashboardView from '@/views/DashboardView.vue'
 
 type FetchMock = ReturnType<typeof vi.fn>
@@ -30,6 +31,20 @@ function employeeUser(role: Role = 'EMPLOYEE'): SessionUser {
     first_name: role === 'HR' ? 'Hari' : 'Ada',
     last_name: role === 'HR' ? 'Rao' : 'Ng',
     employee_code: role === 'HR' ? 'HR-001' : 'EMP-1001',
+  }
+}
+
+function attendanceHome(
+  overrides: Partial<AttendanceHome> = {},
+  role: Role = 'EMPLOYEE',
+): AttendanceHome {
+  return {
+    role,
+    employee_id: '33333333-3333-3333-3333-333333333333',
+    sessions: [],
+    open_session: null,
+    exceptions: [],
+    ...overrides,
   }
 }
 
@@ -130,6 +145,20 @@ function panelButton(wrapper: VueWrapper, text: RegExp) {
   return button!
 }
 
+function navbarPunch(wrapper: VueWrapper) {
+  return wrapper.get('[data-slot="app-navbar"]').get('[data-slot="shell-punch"]')
+}
+
+function punchAction(wrapper: VueWrapper, text: RegExp) {
+  return navbarPunch(wrapper)
+    .findAll('button')
+    .find((node) => text.test(node.text()))
+}
+
+function isAttendanceHomeUrl(url: string) {
+  return url === '/api/attendance' || url.endsWith('/api/attendance')
+}
+
 describe('AppShell role nav and control panel', () => {
   let fetchMock: FetchMock
   let wrapper: VueWrapper | null = null
@@ -149,15 +178,27 @@ describe('AppShell role nav and control panel', () => {
     document.body.innerHTML = ''
   })
 
-  async function mountShell(role: Role, dashboard: DashboardPayload) {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+  async function mountShell(
+    role: Role,
+    dashboard: DashboardPayload,
+    attendance: AttendanceHome = attendanceHome({}, role),
+    user: SessionUser = employeeUser(role),
+  ) {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
+      if (url.includes('/api/attendance/check-in') && init?.method === 'POST') {
+        return jsonResponse(501, { detail: 'Check-in is not implemented.' })
+      }
+      if (url.includes('/api/attendance/check-out') && init?.method === 'POST') {
+        return jsonResponse(501, { detail: 'Check-out is not implemented.' })
+      }
       if (url.includes('/api/dashboard')) return jsonResponse(200, dashboard)
+      if (isAttendanceHomeUrl(url)) return jsonResponse(200, attendance)
       return jsonResponse(404, { detail: 'not found' })
     })
     const pinia = createPinia()
     setActivePinia(pinia)
-    useSessionStore().user = employeeUser(role)
+    useSessionStore().user = user
     sessionStorage.setItem('dayflow.token', 'test-token')
     const router = await makeAppRouter()
     await router.push('/dashboard')
@@ -205,6 +246,156 @@ describe('AppShell role nav and control panel', () => {
     const { wrapper: view } = await mountShell('EMPLOYEE', employeeDashboard())
     expect(panelButton(view, /Check in/i).attributes('disabled')).toBeUndefined()
   })
+
+  it('shows Check out in the 46px bar while open_session is set, with Checked in since from check_in_at', async () => {
+    const checkInAt = '2026-08-22T03:30:00Z'
+    const { wrapper: view } = await mountShell(
+      'EMPLOYEE',
+      employeeDashboard({ attendance_state: 'checked_in' }),
+      attendanceHome({
+        open_session: { id: 's-open', check_in_at: checkInAt },
+      }),
+    )
+    const punch = navbarPunch(view)
+    expect(punch.text()).toContain(`Checked in since ${formatClock(checkInAt)}`)
+    expect(punchAction(view, /Check out/i)).toBeTruthy()
+    expect(punchAction(view, /Check in/i)).toBeUndefined()
+  })
+
+  it('does not offer Check out after a successful check-out', async () => {
+    const checkInAt = '2026-08-22T03:30:00Z'
+    const today = formatLocalIsoDate()
+    const openHome = attendanceHome({
+      open_session: { id: 's-open', check_in_at: checkInAt },
+      sessions: [
+        {
+          id: 's-open',
+          employee_id: '33333333-3333-3333-3333-333333333333',
+          work_date: today,
+          check_in_at: checkInAt,
+          check_out_at: null,
+          status: 'OPEN',
+        },
+      ],
+    })
+    const closedHome = attendanceHome({
+      open_session: null,
+      sessions: [
+        {
+          id: 's-open',
+          employee_id: '33333333-3333-3333-3333-333333333333',
+          work_date: today,
+          check_in_at: checkInAt,
+          check_out_at: `${today}T12:00:00Z`,
+          status: 'PRESENT',
+        },
+      ],
+    })
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/api/attendance/check-out') && init?.method === 'POST') {
+        return jsonResponse(200, {
+          id: 's-open',
+          employee_id: '33333333-3333-3333-3333-333333333333',
+          work_date: today,
+          check_in_at: checkInAt,
+          check_out_at: `${today}T12:00:00Z`,
+          source: 'SERVER',
+          status: 'PRESENT',
+          worked_minutes: 510,
+        })
+      }
+      if (url.includes('/api/dashboard')) {
+        const checkedOut = fetchMock.mock.calls.some(
+          ([called, calledInit]) =>
+            String(called).includes('/api/attendance/check-out') &&
+            (calledInit as RequestInit | undefined)?.method === 'POST',
+        )
+        return jsonResponse(
+          200,
+          employeeDashboard({
+            attendance_state: checkedOut ? 'checked_out' : 'checked_in',
+          }),
+        )
+      }
+      if (isAttendanceHomeUrl(url)) {
+        const checkedOut = fetchMock.mock.calls.some(
+          ([called, calledInit]) =>
+            String(called).includes('/api/attendance/check-out') &&
+            (calledInit as RequestInit | undefined)?.method === 'POST',
+        )
+        return jsonResponse(200, checkedOut ? closedHome : openHome)
+      }
+      return jsonResponse(404, { detail: 'not found' })
+    })
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    useSessionStore().user = employeeUser('EMPLOYEE')
+    sessionStorage.setItem('dayflow.token', 'test-token')
+    const router = await makeAppRouter()
+    await router.push('/dashboard')
+    await router.isReady()
+    wrapper = mount(
+      defineComponent({
+        setup: () => () => h(RouterView),
+      }),
+      {
+        attachTo: document.body,
+        global: { plugins: [pinia, router] },
+      },
+    )
+    await flushPromises()
+
+    const checkOut = punchAction(wrapper, /Check out/i)
+    expect(checkOut).toBeTruthy()
+    await checkOut!.trigger('click')
+    await flushPromises()
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).includes('/api/attendance/check-out') &&
+          (init as RequestInit | undefined)?.method === 'POST',
+      ),
+    ).toBe(true)
+    expect(navbarPunch(wrapper).text()).toMatch(/Checked out/)
+    expect(punchAction(wrapper, /Check out/i)).toBeUndefined()
+  })
+
+  it('shows punch actions for an employee session user, including HR with an employee record', async () => {
+    const { wrapper: employeeView } = await mountShell('EMPLOYEE', employeeDashboard())
+    expect(navbarPunch(employeeView).text()).toMatch(/Not checked in/)
+    expect(punchAction(employeeView, /Check in/i)).toBeTruthy()
+    employeeView.unmount()
+    wrapper = null
+
+    const { wrapper: hrView } = await mountShell('HR', hrDashboard())
+    wrapper = hrView
+    expect(navbarPunch(hrView).text()).toMatch(/Not checked in/)
+    expect(punchAction(hrView, /Check in/i)).toBeTruthy()
+  })
+
+  it('hides the shell punch control when employee_id is null', async () => {
+    const { wrapper: view } = await mountShell(
+      'HR',
+      hrDashboard(),
+      attendanceHome({ employee_id: null }, 'HR'),
+      { ...employeeUser('HR'), employee_id: null },
+    )
+    expect(view.find('[data-slot="shell-punch"]').exists()).toBe(false)
+    expect(view.text()).not.toMatch(/Not checked in/)
+    expect(view.text()).not.toMatch(/Check in/)
+  })
+
+  it('shows the API error on a failed shell punch and does not fake success', async () => {
+    const { wrapper: view } = await mountShell('EMPLOYEE', employeeDashboard())
+    await punchAction(view, /Check in/i)!.trigger('click')
+    await flushPromises()
+    expect(view.get('[data-slot="shell-punch-error"]').text()).toMatch(/not implemented|Check-in/i)
+    expect(navbarPunch(view).text()).toMatch(/Not checked in/)
+    expect(punchAction(view, /Check in/i)).toBeTruthy()
+    expect(view.text()).not.toMatch(/Checked in successfully/)
+  })
 })
 
 describe('employee dashboard states', () => {
@@ -226,7 +417,10 @@ describe('employee dashboard states', () => {
     document.body.innerHTML = ''
   })
 
-  async function mountDashboard(payload: DashboardPayload) {
+  async function mountDashboard(
+    payload: DashboardPayload,
+    attendance: AttendanceHome = attendanceHome(),
+  ) {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes('/api/attendance/check-in') && init?.method === 'POST') {
@@ -236,6 +430,7 @@ describe('employee dashboard states', () => {
         return jsonResponse(501, { detail: 'Check-out is not implemented.' })
       }
       if (url.includes('/api/dashboard')) return jsonResponse(200, payload)
+      if (isAttendanceHomeUrl(url)) return jsonResponse(200, attendance)
       return jsonResponse(404, { detail: 'not found' })
     })
     const pinia = createPinia()
@@ -275,7 +470,12 @@ describe('employee dashboard states', () => {
           (init as RequestInit | undefined)?.method === 'POST',
       ),
     ).toBe(true)
-    expect(view.get('[role="alert"]').text()).toMatch(/not implemented|Check-in/i)
+    expect(
+      view
+        .findAll('[role="alert"]')
+        .map((node) => node.text())
+        .join(' '),
+    ).toMatch(/not implemented|Check-in/i)
   })
 
   it('switches the control action to Check out after check-in', async () => {
@@ -283,6 +483,9 @@ describe('employee dashboard states', () => {
       employeeDashboard({
         headline: 'You are checked in',
         attendance_state: 'checked_in',
+      }),
+      attendanceHome({
+        open_session: { id: 's-open', check_in_at: '2026-08-22T03:30:00Z' },
       }),
     )
     expect(view.text()).toMatch(/Checked in/)
@@ -359,6 +562,7 @@ describe('HR dashboard states', () => {
   async function mountDashboard(payload: DashboardPayload) {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       if (String(input).includes('/api/dashboard')) return jsonResponse(200, payload)
+      if (isAttendanceHomeUrl(String(input))) return jsonResponse(200, attendanceHome({}, 'HR'))
       return jsonResponse(404, { detail: 'not found' })
     })
     const pinia = createPinia()
