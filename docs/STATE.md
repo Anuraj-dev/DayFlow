@@ -1,34 +1,107 @@
 # Dayflow state
 
-## 2026-08-22 — docs on current main
+Last updated: 2026-08-22
 
-Shipped on `main`:
+This document records what the current `main` branch can demonstrate and what remains intentionally
+deferred. Product requirements are in `docs/PRODUCT.md`; domain rules are in `docs/DOMAIN.md`.
 
-- Auth: sign-in, `/me`, invite activation (token-keyed; expired/used/duplicate email return 400)
-- Employees: directory, profile PATCH, org-wide view-only GET, HR INACTIVE disables login
-- Attendance: server-time check-in/out, HR corrections, one open session per employee
-- Leave: request, approve/reject, balances
-- Payroll: salary components, period finalize/publish, role dashboards
-- Vue: Odoo 19 shell, people, attendance, time-off, payroll
-- Activate UI maps API 400 expired/used to dedicated screens (#15)
-- CI: `.github/workflows/backend.yml` and `frontend.yml`
+## Current release
 
-Deferred:
+Dayflow is a working hackathon MVP for one seeded organization. The Vue shell, FastAPI API, and
+PostgreSQL schema are implemented together and run with Docker Compose.
 
-- Settings UI (policies are seeded)
-- Document upload
-- Profile picture upload (`profile_image_key` is unused)
-- SMTP (console email adapter)
-- Forgot-password mail
-- Alembic migrations (`create_all` on startup)
-- Reports / analytics
-- Docker Hub publish
+## Shipped
 
-Sick-leave requests may attach one optional PDF/JPEG/PNG certificate. Download is requester or same-org HR only. Seed and hire grants are Paid 24 / Sick 7 / Unpaid 0.
+### Identity and access
 
-People **nav** is HR-only. Employees can still open `/employees/:id` for a coworker if they have the UUID; the record is view-only and salary stays self/HR. Private and bank fields are omitted from directory and coworker GET; self and same-org HR may read them. Employees still self-edit only phone and address. Change password is `POST /api/auth/change-password` and requires the current password.
+- Seeded HR and employee accounts
+- Email/password sign-in and `/me`
+- Invite-bound employee activation
+- Console email adapter for activation and password-reset requests
+- Password change for signed-in users
+- Role-aware navigation and dashboards
+- Organization-scoped server authorization
 
-## 2026-08-22 — implementer-only, merge on green
+### People
 
-- Reviewers removed. One implementer per slice: TDD, then GitHub PR, squash-merge if Actions is green.
-- CI on `main`; do not rebuild it unless it is broken.
+- HR employee directory and employee creation
+- Invite tokens tied to employee, organization, email, and role
+- Self and HR profile access
+- Employee self-edit limited to permitted personal fields
+- Coworker profiles are view-only
+- HR inactive status disables login
+
+### Attendance
+
+- Server-time check-in and check-out
+- One open attendance session per employee
+- Employee monthly attendance view
+- HR current-day roster and exception queue
+- Attendance correction requests and HR decisions
+- Text-based attendance statuses and audit events
+
+### Time off
+
+- Paid, sick, and unpaid leave types
+- Organization-local counted days and balances
+- Employee request and pending cancellation
+- HR approve/reject flow with required rejection comments
+- Leave events, balance updates, and audit events
+- Optional PDF/JPEG/PNG certificate for sick leave
+
+### Payroll
+
+- Wage and salary component configuration
+- Monthly payroll periods: draft, finalized, and published
+- Attendance and leave validation before finalization
+- Prorated earning calculations, PF, professional tax, and employer PF
+- Immutable finalized records with snapshot lines
+- Employees see only their own published payroll records
+- HR can review all records and publish a period
+
+### Frontend and delivery
+
+- Odoo 19-style product shell with responsive employee views
+- HR-only People and Settings navigation
+- Loading, empty, validation, permission, and error states on core views
+- Frontend and backend CI workflows
+- Focused authorization and domain tests
+
+## Deferred
+
+- Custom Settings UI; seeded work policies are used
+- Document and profile-picture upload
+- Downloadable payslip files; payroll breakdowns are available in the UI
+- Full SMTP delivery and a complete password-reset link flow
+- Alembic migrations; startup uses `Base.metadata.create_all`
+- Reports, analytics, notifications, and Docker Hub publishing
+
+## Seed and data behavior
+
+On an empty database, API startup creates the schema and seeds the demo organization, HR account,
+employee account, leave types, balances, salary components, and one published payroll period.
+
+The Compose volume is persistent. Extra presentation records remain until `docker compose down -v`
+is run. Never load production people, payroll, or documents into this prototype.
+
+## Verification
+
+Local frontend proof:
+
+```bash
+npm --prefix frontend run test:unit -- --run
+npm --prefix frontend run type-check
+npm --prefix frontend run build
+```
+
+Backend proof runs against disposable PostgreSQL because the test fixture recreates its configured
+database. CI provides an isolated PostgreSQL service for every run.
+
+## Operational notes
+
+- Compose project name: `dayflow`
+- PostgreSQL volume: `dayflow_pg`
+- Web app: `localhost:5173`
+- API: `localhost:8000`
+- PostgreSQL host port: `localhost:5433`
+- Stop only this project with `docker compose down`
