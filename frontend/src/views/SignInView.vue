@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { EyeIcon, EyeOffIcon } from '@lucide/vue'
 import { ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
@@ -15,6 +16,7 @@ const error = ref('')
 const errorTitle = ref('')
 const status = ref('')
 const submitting = ref(false)
+const passwordVisible = ref(false)
 const session = useSessionStore()
 const router = useRouter()
 const route = useRoute()
@@ -65,7 +67,7 @@ async function onForgot() {
 
 <template>
   <main class="flex min-h-screen items-center justify-center bg-[#F8F9FA] p-6">
-    <section class="sheet w-full max-w-md">
+    <section class="sheet sheet-auth">
       <p class="m-0 text-sm font-medium text-[#495057]">Dayflow</p>
       <h1 class="mt-1 mb-4">
         {{ mode === 'forgot' ? 'Reset your password' : 'Sign in with your work email' }}
@@ -80,16 +82,29 @@ async function onForgot() {
           Work email
           <Input v-model="email" type="email" autocomplete="username" required />
         </label>
-        <label v-if="mode === 'sign-in'" class="grid gap-1 text-sm font-medium">
-          Password
-          <Input
-            v-model="password"
-            type="password"
-            autocomplete="current-password"
-            required
-            minlength="12"
-          />
-        </label>
+        <div v-if="mode === 'sign-in'" class="grid gap-1 text-sm font-medium">
+          <label for="sign-in-password">Password</label>
+          <span class="flex items-center gap-2">
+            <Input
+              id="sign-in-password"
+              v-model="password"
+              :type="passwordVisible ? 'text' : 'password'"
+              autocomplete="current-password"
+              required
+              minlength="12"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              :aria-label="passwordVisible ? 'Hide password' : 'Show password'"
+              @click="passwordVisible = !passwordVisible"
+            >
+              <EyeOffIcon v-if="passwordVisible" class="size-4" aria-hidden="true" />
+              <EyeIcon v-else class="size-4" aria-hidden="true" />
+              {{ passwordVisible ? 'Hide' : 'Show' }}
+            </Button>
+          </span>
+        </div>
         <Button v-if="mode === 'sign-in'" type="submit" :disabled="submitting">
           {{ submitting ? 'Signing in…' : 'Sign in' }}
         </Button>

@@ -28,6 +28,12 @@ class AttendanceExceptionOut(BaseModel):
     employee_name: str | None = None
     kind: str
     status: str
+    work_date: date | None = None
+    current_check_in_at: datetime | None = None
+    current_check_out_at: datetime | None = None
+    proposed_check_in_at: datetime | None = None
+    proposed_check_out_at: datetime | None = None
+    reason: str | None = None
 
 
 class AttendanceHome(BaseModel):

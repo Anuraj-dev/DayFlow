@@ -364,5 +364,56 @@ describe('HR attendance review', () => {
     await nextTick()
     expect(wrapper.get('table').text()).toMatch(/Nia Shah/)
     expect(wrapper.get('table').text()).not.toMatch(/Rohan Iyer/)
+    expect(wrapper.text()).not.toMatch(/This week/)
+  })
+
+  it('shows correction evidence and sends an HR approval', async () => {
+    let reviewed = false
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/api/attendance/corrections/ex-corr/review') && init?.method === 'POST') {
+        reviewed = true
+        return jsonResponse(200, { id: 'ex-corr', status: 'APPROVED' })
+      }
+      return jsonResponse(
+        200,
+        home({
+          role: 'HR',
+          exceptions: reviewed
+            ? []
+            : [
+                {
+                  id: 'ex-corr',
+                  employee_id: SELF_ID,
+                  employee_name: 'Rohan Iyer',
+                  kind: 'correction_pending',
+                  status: 'PENDING',
+                  work_date: '2026-08-20',
+                  current_check_in_at: '2026-08-20T04:00:00Z',
+                  current_check_out_at: '2026-08-20T12:00:00Z',
+                  proposed_check_in_at: '2026-08-20T03:30:00Z',
+                  proposed_check_out_at: '2026-08-20T12:30:00Z',
+                  reason: 'Badge log shows an earlier arrival.',
+                },
+              ],
+        }),
+      )
+    })
+
+    const wrapper = await mountAttendance('HR')
+    expect(wrapper.text()).toMatch(/Badge log shows an earlier arrival/)
+    expect(wrapper.text()).toMatch(/Proposed check in/)
+    await namedButton(wrapper, 'Approve correction').trigger('click')
+    await flushPromises()
+
+    const reviewCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes('/api/attendance/corrections/ex-corr/review'),
+    )
+    expect(reviewCall).toBeTruthy()
+    expect(JSON.parse(String((reviewCall?.[1] as RequestInit).body))).toEqual({
+      decision: 'APPROVED',
+      comment: null,
+    })
+    expect(wrapper.text()).toMatch(/Correction approved and attendance updated/)
   })
 })

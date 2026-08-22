@@ -165,7 +165,7 @@ async def _pending_exceptions(
     employee = aliased(Employee)
     rows = (
         await db.execute(
-            select(AttendanceCorrectionRequest, employee)
+            select(AttendanceCorrectionRequest, employee, AttendanceSession)
             .join(
                 AttendanceSession,
                 AttendanceSession.id == AttendanceCorrectionRequest.attendance_session_id,
@@ -179,7 +179,7 @@ async def _pending_exceptions(
         )
     ).all()
     exceptions: list[AttendanceExceptionOut] = []
-    for correction, person in rows:
+    for correction, person, session_row in rows:
         exceptions.append(
             AttendanceExceptionOut(
                 id=correction.id,
@@ -187,26 +187,35 @@ async def _pending_exceptions(
                 employee_name=f"{person.first_name} {person.last_name}",
                 kind="correction_pending",
                 status=correction.status,
+                work_date=session_row.work_date,
+                current_check_in_at=session_row.check_in_at,
+                current_check_out_at=session_row.check_out_at,
+                proposed_check_in_at=correction.proposed_check_in_at,
+                proposed_check_out_at=correction.proposed_check_out_at,
+                reason=correction.reason,
             )
         )
-    open_missing = list(
-        await db.scalars(
-            select(AttendanceSession)
-            .join(Employee, Employee.id == AttendanceSession.employee_id)
+    open_missing = (
+        await db.execute(
+            select(AttendanceSession, employee)
+            .join(employee, employee.id == AttendanceSession.employee_id)
             .where(
-                Employee.organization_id == organization_id,
+                employee.organization_id == organization_id,
                 AttendanceSession.check_out_at.is_(None),
                 AttendanceSession.status == AttendanceStatus.OPEN.value,
             )
         )
-    )
-    for session in open_missing:
+    ).all()
+    for session, person in open_missing:
         exceptions.append(
             AttendanceExceptionOut(
                 id=session.id,
                 employee_id=session.employee_id,
+                employee_name=f"{person.first_name} {person.last_name}",
                 kind="missing_check_out",
                 status=session.status,
+                work_date=session.work_date,
+                current_check_in_at=session.check_in_at,
             )
         )
     return exceptions

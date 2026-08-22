@@ -25,7 +25,8 @@ function jsonResponse(status: number, body: unknown): Promise<Response> {
 function inputByLabel(wrapper: VueWrapper, labelText: string) {
   const label = wrapper.findAll('label').find((node) => node.text().includes(labelText))
   expect(label, `missing label "${labelText}"`).toBeTruthy()
-  return label!.get('input')
+  const controlId = label!.attributes('for')
+  return controlId ? wrapper.get(`#${controlId}`) : label!.get('input')
 }
 
 function namedButton(wrapper: VueWrapper, text: string) {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 
 import EmptyState from '@/components/EmptyState.vue'
 import PageHeader from '@/components/PageHeader.vue'
@@ -16,6 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { api, HttpError } from '@/api/client'
+import { formatCurrency, formatDate, formatEnumLabel } from '@/lib/format'
 import { payrollStatusLabel, statusTone } from '@/lib/status'
 import { useSessionStore } from '@/stores/session'
 import type {
@@ -31,9 +32,13 @@ const data = ref<PayrollHome | null>(null)
 const people = ref<EmployeeSummary[]>([])
 const error = ref('')
 const actionError = ref('')
+const actionStatus = ref('')
 const loading = ref(true)
 const savingSalary = ref(false)
 const selectedPeriodId = ref('')
+const pendingAction = ref<'finalize' | 'publish' | ''>('')
+const periodPage = ref(1)
+const PERIOD_PAGE_SIZE = 10
 const salaryDrafts = reactive<Record<string, Record<string, string>>>({})
 
 function isPublished(status: string | null | undefined): boolean {
@@ -76,6 +81,17 @@ const currentRecord = computed(() => {
 const selectedPeriod = computed(() => {
   const rows = data.value?.periods ?? []
   return rows.find((row) => row.id === selectedPeriodId.value) ?? rows[0] ?? null
+})
+
+const periodPageCount = computed(() => Math.max(1, Math.ceil(publishedPeriods.value.length / PERIOD_PAGE_SIZE)))
+const pagedPeriods = computed(() => {
+  const start = (periodPage.value - 1) * PERIOD_PAGE_SIZE
+  return publishedPeriods.value.slice(start, start + PERIOD_PAGE_SIZE)
+})
+
+const selectedRecords = computed(() => {
+  if (!selectedPeriod.value) return []
+  return recordsForPeriod(selectedPeriod.value, visibleRecords.value)
 })
 
 const salaryEditable = computed(() => selectedPeriod.value?.status.toUpperCase() === 'DRAFT')
@@ -137,17 +153,30 @@ onMounted(async () => {
 
 async function mutatePeriod(periodId: string, action: 'finalize' | 'publish') {
   actionError.value = ''
+  actionStatus.value = ''
   try {
     await api(`/api/payroll/periods/${periodId}/${action}`, { method: 'POST' })
+    pendingAction.value = ''
     await loadHome()
+    actionStatus.value = action === 'finalize' ? 'Payroll period finalized.' : 'Payslips published.'
   } catch (err) {
     actionError.value = err instanceof HttpError ? err.detail : 'Payroll action failed.'
   }
 }
 
+function requestPeriodAction(action: 'finalize' | 'publish') {
+  if (!selectedPeriod.value) return
+  if (pendingAction.value === action) {
+    void mutatePeriod(selectedPeriod.value.id, action)
+    return
+  }
+  pendingAction.value = action
+}
+
 async function saveSalary() {
   if (!selectedPeriod.value || !salaryEditable.value) return
   actionError.value = ''
+  actionStatus.value = ''
   savingSalary.value = true
   try {
     for (const row of salaryRows.value) {
@@ -165,6 +194,7 @@ async function saveSalary() {
       })
     }
     await loadHome()
+    actionStatus.value = 'Salary inputs saved.'
   } catch (err) {
     actionError.value = err instanceof HttpError ? err.detail : 'Could not save salary.'
   } finally {
@@ -174,12 +204,18 @@ async function saveSalary() {
 
 async function downloadPayslip(recordId: string) {
   actionError.value = ''
+  actionStatus.value = ''
   try {
     await api(`/api/payroll/records/${recordId}/payslip`)
+    actionStatus.value = 'Payslip download prepared.'
   } catch (err) {
     actionError.value = err instanceof HttpError ? err.detail : 'Could not download payslip.'
   }
 }
+
+watch(selectedPeriodId, () => {
+  pendingAction.value = ''
+})
 </script>
 
 <template>
@@ -195,9 +231,17 @@ async function downloadPayslip(recordId: string) {
     <p v-if="loading">Loading payroll…</p>
     <p v-else-if="error" role="alert">{{ error }}</p>
     <div v-else-if="data">
-      <p v-if="actionError" role="alert">{{ actionError }}</p>
+      <p v-if="actionError" class="feedback-error" role="alert">{{ actionError }}</p>
+      <p v-if="actionStatus" class="feedback-success" role="status">{{ actionStatus }}</p>
 
       <template v-if="session.isHr">
+        <div class="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm text-[#495057]">
+          <p class="m-0">{{ data.periods.length }} payroll periods</p>
+          <div class="flex gap-2">
+            <Button type="button" size="sm" variant="outline" :disabled="periodPage === 1" @click="periodPage--">Previous</Button>
+            <Button type="button" size="sm" variant="outline" :disabled="periodPage === periodPageCount" @click="periodPage++">Next</Button>
+          </div>
+        </div>
         <Table>
           <TableCaption class="sr-only">Payroll periods</TableCaption>
           <TableHeader>
@@ -205,50 +249,67 @@ async function downloadPayslip(recordId: string) {
               <TableHead>Period</TableHead>
               <TableHead>Pay date</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>Actions</TableHead>
+              <TableHead>Review</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             <TableRow v-if="!data.periods.length">
               <TableCell colspan="4">No payroll period.</TableCell>
             </TableRow>
-            <TableRow v-for="period in data.periods" :key="period.id">
-              <TableCell>{{ period.starts_on }} – {{ period.ends_on }}</TableCell>
-              <TableCell>{{ period.pay_date }}</TableCell>
+            <TableRow v-for="period in pagedPeriods" :key="period.id" :data-selected="selectedPeriodId === period.id">
+              <TableCell>{{ formatDate(period.starts_on) }} to {{ formatDate(period.ends_on) }}</TableCell>
+              <TableCell>{{ formatDate(period.pay_date) }}</TableCell>
               <TableCell>
                 <StatusBadge :label="periodBadge(period)" :tone="statusTone(periodBadge(period))" />
               </TableCell>
-              <TableCell class="flex gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  :disabled="period.status.toUpperCase() !== 'DRAFT'"
-                  @click="mutatePeriod(period.id, 'finalize')"
-                >
-                  Finalize
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  :disabled="period.status.toUpperCase() !== 'FINALIZED'"
-                  @click="mutatePeriod(period.id, 'publish')"
-                >
-                  Publish
+              <TableCell>
+                <Button type="button" size="sm" variant="outline" @click="selectedPeriodId = period.id">
+                  {{ selectedPeriodId === period.id ? 'Selected' : 'Review' }}
                 </Button>
               </TableCell>
             </TableRow>
           </TableBody>
         </Table>
 
-        <div v-if="data.periods.some((row) => row.validation_errors?.length)" class="mt-4">
-          <h2 class="mb-2 text-[21px] font-bold">Validation errors</h2>
-          <ul>
-            <li v-for="message in data.periods.flatMap((row) => row.validation_errors ?? [])" :key="message">
-              {{ message }}
-            </li>
-          </ul>
-        </div>
+        <section v-if="selectedPeriod" class="mt-5 border-t border-border pt-5" aria-labelledby="period-review-title">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 id="period-review-title" class="m-0">Selected payroll period</h2>
+              <p class="mt-1 mb-0 text-[#495057]">
+                {{ formatDate(selectedPeriod.starts_on) }} to {{ formatDate(selectedPeriod.ends_on) }}, pay date {{ formatDate(selectedPeriod.pay_date) }}
+              </p>
+            </div>
+            <StatusBadge :label="periodBadge(selectedPeriod)" :tone="statusTone(periodBadge(selectedPeriod))" />
+          </div>
+          <div v-if="selectedPeriod.validation_errors?.length" class="feedback-error mt-4" role="alert">
+            <strong>Resolve before finalizing</strong>
+            <ul class="mb-0">
+              <li v-for="message in selectedPeriod.validation_errors" :key="message">{{ message }}</li>
+            </ul>
+          </div>
+          <div class="mt-4 flex flex-wrap gap-2">
+            <Button
+              v-if="selectedPeriod.status.toUpperCase() === 'DRAFT'"
+              type="button"
+              variant="outline"
+              :disabled="Boolean(selectedPeriod.validation_errors?.length)"
+              @click="requestPeriodAction('finalize')"
+            >
+              {{ pendingAction === 'finalize' ? 'Confirm finalize' : 'Finalize period' }}
+            </Button>
+            <Button
+              v-if="selectedPeriod.status.toUpperCase() === 'FINALIZED'"
+              type="button"
+              @click="requestPeriodAction('publish')"
+            >
+              {{ pendingAction === 'publish' ? 'Confirm publish' : 'Publish payslips' }}
+            </Button>
+            <Button v-if="pendingAction" type="button" variant="ghost" @click="pendingAction = ''">Cancel</Button>
+          </div>
+          <p v-if="pendingAction" class="mt-2 mb-0 text-sm text-[#495057]">
+            {{ pendingAction === 'finalize' ? 'Finalization locks this period and its salary inputs.' : 'Publishing makes payslips visible to employees.' }}
+          </p>
+        </section>
 
         <div v-if="data.exceptions?.length" class="mt-4">
           <h2 class="mb-2 text-[21px] font-bold">Exceptions</h2>
@@ -288,12 +349,12 @@ async function downloadPayslip(recordId: string) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              <TableRow v-if="!visibleRecords.length">
+              <TableRow v-if="!selectedRecords.length">
                 <TableCell colspan="3">No payroll records.</TableCell>
               </TableRow>
-              <TableRow v-for="row in visibleRecords" :key="row.id">
+              <TableRow v-for="row in selectedRecords" :key="row.id">
                 <TableCell>{{ personName(row.employee_id, row.employee_name) }}</TableCell>
-                <TableCell>{{ row.currency }} {{ row.net_amount }}</TableCell>
+                <TableCell>{{ formatCurrency(row.currency, row.net_amount) }}</TableCell>
                 <TableCell>
                   <StatusBadge
                     :label="row.published_at ? 'Published' : 'Draft'"
@@ -321,7 +382,8 @@ async function downloadPayslip(recordId: string) {
               :key="`${row.employee_id}-${component.code}`"
               class="grid gap-1 text-sm font-medium"
             >
-              {{ component.code }}
+              {{ component.name || formatEnumLabel(component.code) }}
+              <span class="font-normal text-[#495057]">{{ component.code }}</span>
               <Input
                 :model-value="salaryAmount(row.employee_id, component.code)"
                 inputmode="decimal"
@@ -344,7 +406,8 @@ async function downloadPayslip(recordId: string) {
         />
         <div v-else>
           <h2 class="mb-2 text-[21px] font-bold">Current period</h2>
-          <Table>
+          <div class="hidden sm:block">
+            <Table>
             <TableCaption class="sr-only">Current pay period</TableCaption>
             <TableHeader>
               <TableRow>
@@ -357,15 +420,15 @@ async function downloadPayslip(recordId: string) {
             </TableHeader>
             <TableBody>
               <TableRow>
-                <TableCell>{{ currentPeriod.starts_on }} – {{ currentPeriod.ends_on }}</TableCell>
-                <TableCell>{{ currentPeriod.pay_date }}</TableCell>
+                <TableCell>{{ formatDate(currentPeriod.starts_on) }} to {{ formatDate(currentPeriod.ends_on) }}</TableCell>
+                <TableCell>{{ formatDate(currentPeriod.pay_date) }}</TableCell>
                 <TableCell>
                   <StatusBadge
                     :label="periodBadge(currentPeriod)"
                     :tone="statusTone(periodBadge(currentPeriod))"
                   />
                 </TableCell>
-                <TableCell>{{ currentRecord.currency }} {{ currentRecord.net_amount }}</TableCell>
+                <TableCell>{{ formatCurrency(currentRecord.currency, currentRecord.net_amount) }}</TableCell>
                 <TableCell>
                   <Button type="button" size="sm" @click="downloadPayslip(currentRecord.id)">
                     Download payslip
@@ -373,7 +436,22 @@ async function downloadPayslip(recordId: string) {
                 </TableCell>
               </TableRow>
             </TableBody>
-          </Table>
+            </Table>
+          </div>
+          <article class="mobile-record-list">
+            <div class="mobile-record">
+              <div class="mobile-record-row">
+                <span class="mobile-record-label">Period</span>
+                <strong class="mobile-record-value">{{ formatDate(currentPeriod.starts_on) }} to {{ formatDate(currentPeriod.ends_on) }}</strong>
+              </div>
+              <div class="mobile-record-row">
+                <span class="mobile-record-label">Net pay</span>
+                <strong class="mobile-record-value">{{ formatCurrency(currentRecord.currency, currentRecord.net_amount) }}</strong>
+              </div>
+              <StatusBadge :label="periodBadge(currentPeriod)" :tone="statusTone(periodBadge(currentPeriod))" />
+              <Button type="button" @click="downloadPayslip(currentRecord.id)">Download payslip</Button>
+            </div>
+          </article>
           <Table v-if="currentRecord.lines?.length" class="mt-4">
             <TableCaption class="sr-only">Payslip lines</TableCaption>
             <TableHeader>
@@ -385,7 +463,7 @@ async function downloadPayslip(recordId: string) {
             <TableBody>
               <TableRow v-for="line in currentRecord.lines" :key="line.code">
                 <TableCell>{{ line.label }}</TableCell>
-                <TableCell>{{ currentRecord.currency }} {{ line.amount }}</TableCell>
+                <TableCell>{{ formatCurrency(currentRecord.currency, line.amount) }}</TableCell>
               </TableRow>
             </TableBody>
           </Table>
@@ -393,7 +471,8 @@ async function downloadPayslip(recordId: string) {
 
         <div v-if="priorPeriods.length" class="mt-6">
           <h2 class="mb-2 text-[21px] font-bold">Prior periods</h2>
-          <Table>
+          <div class="hidden sm:block">
+            <Table>
             <TableCaption class="sr-only">Prior pay periods</TableCaption>
             <TableHeader>
               <TableRow>
@@ -405,20 +484,31 @@ async function downloadPayslip(recordId: string) {
             </TableHeader>
             <TableBody>
               <TableRow v-for="period in priorPeriods" :key="period.id">
-                <TableCell>{{ period.starts_on }} – {{ period.ends_on }}</TableCell>
-                <TableCell>{{ period.pay_date }}</TableCell>
+                <TableCell>{{ formatDate(period.starts_on) }} to {{ formatDate(period.ends_on) }}</TableCell>
+                <TableCell>{{ formatDate(period.pay_date) }}</TableCell>
                 <TableCell>
                   <StatusBadge :label="periodBadge(period)" :tone="statusTone(periodBadge(period))" />
                 </TableCell>
                 <TableCell>
                   <template v-if="recordFor(period)">
-                    {{ recordFor(period)?.currency }} {{ recordFor(period)?.net_amount }}
+                    {{ formatCurrency(recordFor(period)?.currency ?? 'INR', recordFor(period)?.net_amount) }}
                   </template>
                   <template v-else>—</template>
                 </TableCell>
               </TableRow>
             </TableBody>
-          </Table>
+            </Table>
+          </div>
+          <div class="mobile-record-list">
+            <article v-for="period in priorPeriods" :key="period.id" class="mobile-record">
+              <div class="mobile-record-row">
+                <strong>{{ formatDate(period.starts_on) }} to {{ formatDate(period.ends_on) }}</strong>
+                <StatusBadge :label="periodBadge(period)" :tone="statusTone(periodBadge(period))" />
+              </div>
+              <p class="m-0 text-[#495057]">Paid {{ formatDate(period.pay_date) }}</p>
+              <strong v-if="recordFor(period)">{{ formatCurrency(recordFor(period)?.currency ?? 'INR', recordFor(period)?.net_amount) }}</strong>
+            </article>
+          </div>
         </div>
       </template>
     </div>

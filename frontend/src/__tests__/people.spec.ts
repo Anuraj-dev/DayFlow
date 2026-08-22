@@ -278,7 +278,7 @@ describe('Employee profile form sheet', () => {
     expect(inputByLabel(wrapper, 'Phone').element).toHaveProperty('disabled', true)
     expect(inputByLabel(wrapper, 'Address').element).toHaveProperty('disabled', true)
     expect(namedButton(wrapper, 'Edit').attributes('disabled')).toBeUndefined()
-    expect(namedButton(wrapper, 'Save').attributes('disabled')).toBeDefined()
+    expect(wrapper.findAll('button').some((node) => node.text().includes('Save'))).toBe(false)
   })
 
   it('enters edit mode, flags unsaved changes, and PATCHes permitted personal fields', async () => {
@@ -320,7 +320,8 @@ describe('Employee profile form sheet', () => {
 
     expect(wrapper.text()).not.toMatch(/Unsaved changes/i)
     expect((inputByLabel(wrapper, 'Phone').element as HTMLInputElement).value).toBe('+91-90000-22222')
-    expect(namedButton(wrapper, 'Save').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toMatch(/Profile saved/i)
+    expect(wrapper.findAll('button').some((node) => node.text().includes('Save'))).toBe(false)
   })
 
   it('lets HR edit job fields and keeps salary on the Salary tab', async () => {
@@ -356,8 +357,7 @@ describe('Employee profile form sheet', () => {
 
     await tabTrigger(wrapper, 'Salary').trigger('click')
     await nextTick()
-    expect(wrapper.text()).toMatch(/INR/)
-    expect(wrapper.text()).toMatch(/42000/)
+    expect(wrapper.text()).toMatch(/₹42,000\.00/)
     expect(wrapper.text()).toMatch(/read-only|Payroll/i)
   })
 
@@ -373,7 +373,7 @@ describe('Employee profile form sheet', () => {
     await tabTrigger(wrapper, 'Documents').trigger('click')
     await nextTick()
 
-    expect(wrapper.text()).toMatch(/deferred/i)
+    expect(wrapper.text()).toMatch(/not available yet/i)
     expect(wrapper.text()).toMatch(/Missing document/i)
     expect(wrapper.text()).not.toMatch(/upload is ready/i)
   })
