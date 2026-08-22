@@ -1,5 +1,5 @@
 import secrets
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.adapters.salary import assign_default_salary
 from app.api.deps import CurrentPrincipal, get_current_principal, require_hr
 from app.core.db import get_db
+from app.core.security import hash_password
 from app.domain.attendance import derive_presence
 from app.domain.identity import (
     PRIVATE_EMPLOYEE_FIELDS,
@@ -21,13 +22,11 @@ from app.domain.identity import (
     can_edit_employee,
     can_read_employee,
     can_read_private_employee_fields,
-    hash_invite_token,
     normalize_email,
 )
 from app.domain.leave import DEFAULT_LEAVE_GRANTS, LeaveRequestStatus
 from app.domain.roles import EmployeeStatus, Role, UserStatus
 from app.models import (
-    AccountInvite,
     AttendanceSession,
     AuditEvent,
     Employee,
@@ -198,7 +197,7 @@ async def _presence_by_employee(
 
 @router.get("", response_model=list[EmployeeSummary])
 async def list_employees(
-    principal: CurrentPrincipal = Depends(get_current_principal),
+    principal: CurrentPrincipal = Depends(require_hr),
     db: AsyncSession = Depends(get_db),
 ) -> list[EmployeeSummary]:
     result = await db.scalars(
@@ -220,16 +219,6 @@ async def create_employee(
     existing = await db.scalar(select(User).where(func.lower(User.email) == email))
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This email is already in use.")
-    invited_email = await db.scalar(
-        select(AccountInvite.id).where(
-            AccountInvite.organization_id == principal.organization_id,
-            func.lower(AccountInvite.email) == email,
-            AccountInvite.accepted_at.is_(None),
-        )
-    )
-    if invited_email is not None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This email is already in use.")
-
     joined_on = body.joined_on or datetime.now(UTC).date()
     year = joined_on.year
     serial = (
@@ -262,12 +251,29 @@ async def create_employee(
             serial=serial,
         )
 
+    initial_password = f"{secrets.token_urlsafe(12)}A1!"
+    user = User(
+        email=email,
+        password_hash=hash_password(initial_password),
+        email_verified_at=datetime.now(UTC),
+        status=UserStatus.ACTIVE.value,
+    )
+    db.add(user)
+    await db.flush()
+    db.add(
+        OrganizationMembership(
+            organization_id=principal.organization_id,
+            user_id=user.id,
+            role=Role.EMPLOYEE.value,
+        )
+    )
     employee = Employee(
         organization_id=principal.organization_id,
+        user_id=user.id,
         employee_code=employee_code,
         first_name=body.first_name.strip(),
         last_name=body.last_name.strip(),
-        status=EmployeeStatus.INVITED.value,
+        status=EmployeeStatus.ACTIVE.value,
         joined_on=joined_on,
     )
     db.add(employee)
@@ -299,18 +305,6 @@ async def create_employee(
                 granted_days=grants.get(leave_type.code.upper(), 0.0),
             )
         )
-    invite_token = secrets.token_urlsafe(16)
-    db.add(
-        AccountInvite(
-            organization_id=principal.organization_id,
-            employee_id=employee.id,
-            email=email,
-            role=Role.EMPLOYEE.value,
-            token_hash=hash_invite_token(invite_token),
-            expires_at=datetime.now(UTC) + timedelta(days=7),
-            created_by=principal.user_id,
-        )
-    )
     await assign_default_salary(
         db,
         organization_id=principal.organization_id,
@@ -344,10 +338,9 @@ async def create_employee(
     assert employee is not None
     summary = (await _summaries(db, [employee], principal.organization_id))[0]
     return EmployeeHireResponse(
-        employee=summary,
-        invite_token=invite_token,
-        employee_code=employee_code,
-        detail="Share the employee code and invite token so they can activate.",
+        **summary.model_dump(),
+        initial_password=initial_password,
+        detail="Share the employee code and temporary password. The employee can change it after sign-in.",
     )
 
 

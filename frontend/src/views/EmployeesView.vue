@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { CheckIcon, ChevronRightIcon, CopyIcon, PlusIcon, SearchIcon, UsersRoundIcon } from '@lucide/vue'
+import {
+  CheckIcon,
+  ChevronRightIcon,
+  CopyIcon,
+  PlusIcon,
+  SearchIcon,
+  UsersRoundIcon,
+} from '@lucide/vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
@@ -270,9 +277,15 @@ onMounted(() => void loadEmployees())
           <span v-if="filtersActive">found</span>
         </p>
       </div>
-      <Button v-if="filtersActive" type="button" variant="ghost" size="sm" @click="clearFilters">
-        Clear filters
-      </Button>
+      <div class="flex gap-2">
+        <Button v-if="filtersActive" type="button" variant="ghost" size="sm" @click="clearFilters">
+          Clear filters
+        </Button>
+        <Button type="button" size="sm" @click="setAddEmployeeOpen(true)">
+          <PlusIcon aria-hidden="true" />
+          Add employee
+        </Button>
+      </div>
     </div>
 
     <div v-if="loading" class="state-row" role="status">
@@ -389,6 +402,100 @@ onMounted(() => void loadEmployees())
         </div>
       </footer>
     </template>
+
+    <Dialog :open="addEmployeeOpen" @update:open="setAddEmployeeOpen">
+      <DialogContent class="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{{ createdEmployee ? 'Employee created' : 'Add employee' }}</DialogTitle>
+          <DialogDescription>
+            {{
+              createdEmployee
+                ? 'Share these one-time credentials through your approved company channel.'
+                : 'Dayflow generates the login ID and temporary password.'
+            }}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div v-if="createdEmployee" class="grid gap-3">
+          <label class="grid gap-1 text-sm">
+            Login ID
+            <div class="flex gap-2">
+              <Input :model-value="createdEmployee.employee_code" readonly />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                aria-label="Copy login ID"
+                @click="copyCredential(createdEmployee.employee_code, 'login')"
+              >
+                <CheckIcon v-if="copiedCredential === 'login'" aria-hidden="true" />
+                <CopyIcon v-else aria-hidden="true" />
+              </Button>
+            </div>
+          </label>
+          <label class="grid gap-1 text-sm">
+            Temporary password
+            <div class="flex gap-2">
+              <Input :model-value="createdEmployee.initial_password" readonly />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                aria-label="Copy temporary password"
+                @click="copyCredential(createdEmployee.initial_password, 'password')"
+              >
+                <CheckIcon v-if="copiedCredential === 'password'" aria-hidden="true" />
+                <CopyIcon v-else aria-hidden="true" />
+              </Button>
+            </div>
+          </label>
+          <Button
+            type="button"
+            variant="outline"
+            @click="
+              copyCredential(
+                `Login ID: ${createdEmployee.employee_code}\nTemporary password: ${createdEmployee.initial_password}`,
+                'all',
+              )
+            "
+          >
+            <CheckIcon v-if="copiedCredential === 'all'" aria-hidden="true" />
+            <CopyIcon v-else aria-hidden="true" />
+            Copy both
+          </Button>
+        </div>
+
+        <form v-else class="grid gap-3" @submit.prevent="createEmployee">
+          <div class="grid grid-cols-2 gap-3">
+            <label class="grid gap-1 text-sm"
+              >First name<Input v-model="newEmployee.first_name" required
+            /></label>
+            <label class="grid gap-1 text-sm"
+              >Last name<Input v-model="newEmployee.last_name" required
+            /></label>
+          </div>
+          <label class="grid gap-1 text-sm"
+            >Work email<Input v-model="newEmployee.email" type="email" required
+          /></label>
+          <div class="grid grid-cols-2 gap-3">
+            <label class="grid gap-1 text-sm">Title<Input v-model="newEmployee.title" /></label>
+            <label class="grid gap-1 text-sm"
+              >Department<Input v-model="newEmployee.department"
+            /></label>
+          </div>
+          <label class="grid gap-1 text-sm">Location<Input v-model="newEmployee.location" /></label>
+          <p v-if="createError" role="alert" class="feedback-error">{{ createError }}</p>
+          <DialogFooter :show-close-button="false">
+            <Button type="button" variant="outline" @click="setAddEmployeeOpen(false)"
+              >Cancel</Button
+            >
+            <Button type="submit" :disabled="creating">{{
+              creating ? 'Creating…' : 'Create employee'
+            }}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   </section>
 </template>
 

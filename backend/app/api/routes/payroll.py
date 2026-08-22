@@ -1,9 +1,11 @@
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from html import escape
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -160,6 +162,80 @@ async def _currency(db: AsyncSession, organization_id: UUID) -> str:
     return org.currency if org is not None else "INR"
 
 
+def _payslip_html(
+    *,
+    organization: Organization,
+    employee: Employee,
+    period: PayrollPeriod,
+    record: PayrollRecord,
+    lines: list[PayrollRecordLine],
+) -> str:
+    employee_name = escape(f"{employee.first_name} {employee.last_name}")
+    organization_name = escape(organization.name)
+    employee_code = escape(employee.employee_code)
+    currency = escape(record.currency)
+    line_rows = "".join(
+        f"<tr><td>{escape(line.label_snapshot)}</td><td class='amount'>{currency} {_money(line.amount)}</td></tr>"
+        for line in lines
+    )
+    if not line_rows:
+        line_rows = "<tr><td colspan='2' class='muted'>No component breakdown is available.</td></tr>"
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Payslip - {employee_name}</title>
+  <style>
+    :root {{ color-scheme: light; font-family: Arial, sans-serif; color: #1f2937; }}
+    body {{ margin: 0; background: #f3f4f6; }}
+    main {{ max-width: 760px; margin: 32px auto; padding: 36px; background: white; border: 1px solid #d1d5db; }}
+    header {{ display: flex; justify-content: space-between; gap: 24px; border-bottom: 2px solid #714b67; padding-bottom: 20px; }}
+    h1, h2, p {{ margin-top: 0; }}
+    h1 {{ margin-bottom: 6px; font-size: 28px; }}
+    h2 {{ margin: 28px 0 10px; font-size: 18px; }}
+    .muted {{ color: #6b7280; }}
+    .meta {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px 24px; margin-top: 24px; }}
+    .meta div {{ border-bottom: 1px solid #e5e7eb; padding: 8px 0; }}
+    .meta strong {{ display: block; margin-top: 4px; }}
+    table {{ width: 100%; border-collapse: collapse; }}
+    th, td {{ padding: 10px 8px; border-bottom: 1px solid #e5e7eb; text-align: left; }}
+    .amount {{ text-align: right; font-variant-numeric: tabular-nums; }}
+    .totals {{ margin: 24px 0 0 auto; width: min(100%, 360px); }}
+    .totals div {{ display: flex; justify-content: space-between; padding: 8px; }}
+    .net {{ border-top: 2px solid #714b67; font-size: 20px; font-weight: 700; }}
+    .actions {{ max-width: 760px; margin: 20px auto; text-align: right; }}
+    button {{ border: 0; border-radius: 4px; padding: 10px 18px; background: #714b67; color: white; cursor: pointer; }}
+    @media (max-width: 640px) {{ main {{ margin: 0; padding: 24px; }} .meta {{ grid-template-columns: 1fr; }} }}
+    @media print {{ body {{ background: white; }} main {{ max-width: none; margin: 0; border: 0; }} .actions {{ display: none; }} }}
+  </style>
+</head>
+<body>
+  <div class="actions"><button type="button" onclick="window.print()">Print or save as PDF</button></div>
+  <main>
+    <header>
+      <div><h1>{organization_name}</h1><p class="muted">Employee payslip</p></div>
+      <div><strong>Pay date</strong><p>{period.pay_date.strftime('%d %b %Y')}</p></div>
+    </header>
+    <section class="meta" aria-label="Payslip details">
+      <div><span class="muted">Employee</span><strong>{employee_name}</strong></div>
+      <div><span class="muted">Employee ID</span><strong>{employee_code}</strong></div>
+      <div><span class="muted">Pay period</span><strong>{period.starts_on.strftime('%d %b %Y')} - {period.ends_on.strftime('%d %b %Y')}</strong></div>
+      <div><span class="muted">Payable days</span><strong>{_money(record.payable_days) if record.payable_days is not None else '-'}</strong></div>
+    </section>
+    <h2>Pay components</h2>
+    <table><thead><tr><th>Component</th><th class="amount">Amount</th></tr></thead><tbody>{line_rows}</tbody></table>
+    <section class="totals" aria-label="Pay totals">
+      <div><span>Gross pay</span><strong>{currency} {_money(record.gross_amount)}</strong></div>
+      <div><span>Deductions</span><strong>{currency} {_money(record.deduction_amount)}</strong></div>
+      <div class="net"><span>Net pay</span><span>{currency} {_money(record.net_amount)}</span></div>
+    </section>
+  </main>
+</body>
+</html>"""
+
+
 @router.get("")
 async def payroll_home(
     principal: CurrentPrincipal = Depends(get_current_principal),
@@ -233,6 +309,58 @@ async def payroll_home(
         payload["salary_inputs"] = [row.model_dump(mode="json") for row in salary_inputs]
         payload["currency"] = currency
     return payload
+
+
+@router.get("/records/{record_id}/payslip", response_class=HTMLResponse)
+async def download_payslip(
+    record_id: UUID,
+    principal: CurrentPrincipal = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db),
+) -> HTMLResponse:
+    record = await db.scalar(
+        select(PayrollRecord)
+        .join(PayrollPeriod)
+        .where(
+            PayrollRecord.id == record_id,
+            PayrollPeriod.organization_id == principal.organization_id,
+        )
+    )
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payslip not found.")
+    if principal.role is Role.EMPLOYEE and (
+        principal.employee_id != record.employee_id or record.published_at is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only your published payslips are available.",
+        )
+
+    employee = await _org_employee(db, principal.organization_id, record.employee_id)
+    period = await _org_period(db, principal.organization_id, record.payroll_period_id)
+    organization = await db.get(Organization, principal.organization_id)
+    if organization is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found.")
+    lines = list(
+        await db.scalars(
+            select(PayrollRecordLine)
+            .where(PayrollRecordLine.payroll_record_id == record.id)
+            .order_by(PayrollRecordLine.created_at, PayrollRecordLine.id)
+        )
+    )
+    safe_employee_code = "".join(
+        character for character in employee.employee_code if character.isalnum() or character in "-_"
+    ) or str(employee.id)
+    filename = f"payslip-{safe_employee_code}-{period.starts_on:%Y-%m}.html"
+    return HTMLResponse(
+        _payslip_html(
+            organization=organization,
+            employee=employee,
+            period=period,
+            record=record,
+            lines=lines,
+        ),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/employees/{employee_id}/salary", response_model=EmployeeSalaryOut)
