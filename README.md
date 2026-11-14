@@ -185,3 +185,7 @@ Routes stay thin. They load organization-scoped records, call the domain, persis
 Read [AGENTS.md](AGENTS.md) before you change code. It lists the product invariants and the local proof each change needs.
 
 Name branches `feat/<stack>-<slice>`, write Conventional Commits, and open one pull request per slice. Merge only when CI is green. Never commit `.env`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
